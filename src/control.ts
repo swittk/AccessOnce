@@ -1,14 +1,67 @@
 import type { Access } from "./access.js";
 import type { CompileAccessArgs } from "./compiler.js";
 import {
-  publishAccessChange,
-  recoverAccessSnapshot,
+  publishAccessSnapshotChange,
+  recoverPublishedAccessSnapshot,
   type AccessPublicationAdapter,
+  type AccessSnapshotPublication,
   type VersionedAccessSource,
 } from "./publication.js";
 import type { EffectiveAccessSnapshot } from "./types.js";
 
-/** Inputs needed to bind one application authority source to AccessOnce's safe publication protocol. */
+/** Backend control-plane operations for one versioned application authority source. */
+export type AccessControlPlane<Source, Snapshot> = {
+  /** Read the current durable assignment/policy source and its compare-and-set revision. */
+  read(subjectId: string): Promise<VersionedAccessSource<Source>>;
+  /** Safely replace authority: deny first, CAS the source, compile, then publish the new snapshot. */
+  replace(args: {
+    /** Subject whose authority is being replaced. */
+    subjectId: string;
+    /** Revision the administrator actually loaded. */
+    expectedRevision: string;
+    /** Complete replacement application source. */
+    source: Source;
+  }): Promise<Snapshot>;
+  /** Recompile/publish the current durable source without changing it, for repair or invalidation. */
+  materialize(subjectId: string): Promise<Snapshot>;
+};
+
+/** Generic control-plane options for applications that persist their own runtime snapshot shape. */
+export type AccessPublicationControlPlaneOptions<Source, Snapshot> = {
+  /** BYO durable source/snapshot storage with subject locking and source CAS. */
+  adapter: AccessPublicationAdapter<Source, Snapshot>;
+  /** App-owned deny/final snapshot construction; may be synchronous or asynchronous. */
+  publication: AccessSnapshotPublication<Source, Snapshot>;
+};
+
+/** Create the fail-closed backend control plane for any application-owned runtime snapshot shape. */
+export function createAccessPublicationControlPlane<Source, Snapshot>(
+  options: AccessPublicationControlPlaneOptions<Source, Snapshot>,
+): AccessControlPlane<Source, Snapshot> {
+  return {
+    read(subjectId) {
+      return options.adapter.readSource(subjectId);
+    },
+    replace(args) {
+      return publishAccessSnapshotChange({
+        adapter: options.adapter,
+        publication: options.publication,
+        subjectId: args.subjectId,
+        expectedSourceRevision: args.expectedRevision,
+        nextSource: args.source,
+      });
+    },
+    materialize(subjectId) {
+      return recoverPublishedAccessSnapshot(
+        options.adapter,
+        options.publication,
+        subjectId,
+      );
+    },
+  };
+}
+
+/** Inputs needed to bind one application authority source to AccessOnce's native snapshot compiler. */
 export type AccessControlPlaneOptions<
   Permission extends string,
   Leaf extends Permission,
@@ -29,27 +82,7 @@ export type AccessControlPlaneOptions<
   ): Omit<CompileAccessArgs<Permission, Dimension, Attribute>, "sourceRevision">;
 };
 
-/** Backend control-plane operations for one versioned application authority source. */
-export type AccessControlPlane<
-  Source,
-  Snapshot,
-> = {
-  /** Read the current durable assignment/policy source and its compare-and-set revision. */
-  read(subjectId: string): Promise<VersionedAccessSource<Source>>;
-  /** Safely replace authority: deny first, CAS the source, compile, then publish the new snapshot. */
-  replace(args: {
-    /** Subject whose authority is being replaced. */
-    subjectId: string;
-    /** Revision the administrator actually loaded. */
-    expectedRevision: string;
-    /** Complete replacement application source. */
-    source: Source;
-  }): Promise<Snapshot>;
-  /** Recompile/publish the current durable source without changing it, for repair or invalidation. */
-  materialize(subjectId: string): Promise<Snapshot>;
-};
-
-/** Create the recommended backend control-plane facade without prescribing a database or assignment schema. */
+/** Create the recommended native-snapshot control plane over the generic publication protocol. */
 export function createAccessControlPlane<
   Permission extends string,
   Leaf extends Permission,
@@ -68,27 +101,18 @@ export function createAccessControlPlane<
   Source,
   EffectiveAccessSnapshot<Leaf, Dimension, Attribute>
 > {
-  return {
-    read(subjectId) {
-      return options.adapter.readSource(subjectId);
+  return createAccessPublicationControlPlane({
+    adapter: options.adapter,
+    publication: {
+      deny({ current }) {
+        return options.access.deny(`pending:${current.revision}`);
+      },
+      compile({ source, sourceRevision }) {
+        return options.access.compile({
+          ...options.compileSource(source),
+          sourceRevision,
+        });
+      },
     },
-    replace(args) {
-      return publishAccessChange({
-        catalog: options.access.catalog,
-        adapter: options.adapter,
-        subjectId: args.subjectId,
-        expectedSourceRevision: args.expectedRevision,
-        nextSource: args.source,
-        compileSource: options.compileSource,
-      });
-    },
-    materialize(subjectId) {
-      return recoverAccessSnapshot(
-        options.access.catalog,
-        options.adapter,
-        subjectId,
-        options.compileSource,
-      );
-    },
-  };
+  });
 }

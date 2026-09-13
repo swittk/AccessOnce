@@ -71,6 +71,9 @@ if (typeof cjsReact.createMutableReactAccessSource !== "function") {
 if (typeof esmControl.createAccessGrantControlClient !== "function") {
   throw new Error("ESM control subpath is missing createAccessGrantControlClient");
 }
+if (typeof esmControl.createAccessPublicationControlPlane !== "function") {
+  throw new Error("ESM control subpath is missing createAccessPublicationControlPlane");
+}
 if (typeof esmControl.createAccessRelationshipControlClient !== "function") {
   throw new Error("ESM control subpath is missing createAccessRelationshipControlClient");
 }
@@ -79,6 +82,9 @@ if (typeof esm.constrainRelationshipQuery !== "function") {
 }
 if (typeof cjsControl.createAccessGrantControlClient !== "function") {
   throw new Error("CJS control subpath is missing createAccessGrantControlClient");
+}
+if (typeof cjsControl.createAccessPublicationControlPlane !== "function") {
+  throw new Error("CJS control subpath is missing createAccessPublicationControlPlane");
 }
 if (typeof cjsControl.createAccessRelationshipControlClient !== "function") {
   throw new Error("CJS control subpath is missing createAccessRelationshipControlClient");

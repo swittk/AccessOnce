@@ -1,8 +1,10 @@
 import type { Access } from "./access.js";
 import {
   createAccessControlPlane,
+  createAccessPublicationControlPlane,
   type AccessControlPlane,
   type AccessControlPlaneOptions,
+  type AccessPublicationControlPlaneOptions,
 } from "./control.js";
 import type { AccessGrant, AccessScopeSource, EffectiveAccessSnapshot } from "./types.js";
 
@@ -577,8 +579,10 @@ export function createAccessGrantControlClient<
 
 export {
   createAccessControlPlane,
+  createAccessPublicationControlPlane,
   type AccessControlPlane,
   type AccessControlPlaneOptions,
+  type AccessPublicationControlPlaneOptions,
 };
 
 export * from "./relationship-control.js";

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createAccess,
   createAccessControlPlane,
+  createAccessPublicationControlPlane,
   type AccessPublicationAdapter,
   type EffectiveAccessSnapshot,
 } from "../src/index.js";
@@ -77,5 +78,73 @@ describe("access control plane", () => {
     const repaired = await control.materialize("alice");
     expect(access.can(repaired, "write")).toBe(true);
     expect(store.state().snapshot).toBe(repaired);
+  });
+
+  it("publishes an application-owned snapshot shape through the same deny-first control plane", async () => {
+    type CustomSnapshot = {
+      kind: "app-snapshot";
+      revision: string;
+      grants: readonly string[];
+      denied: boolean;
+    };
+    let source = { revision: "7", source: { grants: ["read", "write"] } };
+    let snapshot: CustomSnapshot = {
+      kind: "app-snapshot",
+      revision: "7",
+      grants: ["read", "write"],
+      denied: false,
+    };
+    const control = createAccessPublicationControlPlane({
+      adapter: {
+        async withSubjectLock(_subjectId, work) {
+          return work();
+        },
+        async readSource() {
+          return source;
+        },
+        async compareAndSetSource(_subjectId, expectedRevision, nextSource) {
+          if (source.revision !== expectedRevision) {
+            throw new Error("revision mismatch");
+          }
+          source = { revision: "8", source: nextSource };
+          return source;
+        },
+        async writeSnapshot(_subjectId, nextSnapshot) {
+          snapshot = nextSnapshot;
+        },
+      },
+      publication: {
+        deny({ current }) {
+          return {
+            kind: "app-snapshot",
+            revision: `pending:${current.revision}`,
+            grants: [],
+            denied: true,
+          };
+        },
+        compile({ source: nextSource, sourceRevision }) {
+          return {
+            kind: "app-snapshot",
+            revision: sourceRevision,
+            grants: nextSource.grants,
+            denied: false,
+          };
+        },
+      },
+    });
+
+    const replaced = await control.replace({
+      subjectId: "alice",
+      expectedRevision: "7",
+      source: { grants: ["read"] },
+    });
+    expect(replaced).toEqual({
+      kind: "app-snapshot",
+      revision: "8",
+      grants: ["read"],
+      denied: false,
+    });
+    expect(snapshot).toEqual(replaced);
+    expect((await control.materialize("alice")).revision).toBe("8");
   });
 });

@@ -152,6 +152,24 @@ await control.replace({
 });
 ```
 
+Applications that already persist their own runtime snapshot shape use the lower-level `createAccessPublicationControlPlane()`. It keeps the same lock → deny → source CAS → final snapshot protocol while the application owns how its deny/final snapshots are built:
+
+```ts
+const control = createAccessPublicationControlPlane({
+  adapter: myDurableStore,
+  publication: {
+    deny({ current }) {
+      return makeDeniedSnapshot(`pending:${current.revision}`);
+    },
+    compile({ subjectId, source, sourceRevision }) {
+      return compileMyExistingSnapshot(subjectId, source, sourceRevision);
+    },
+  },
+});
+```
+
+This is the publication-side equivalent of `access.adapt(...)`: existing snapshot formats do not need to be replaced just to reuse AccessOnce's durability protocol.
+
 Shared-profile fan-out, occupational-role migration, and infrastructure gateway roles are application concerns: identify the affected subjects and rematerialize them through the app's efficient storage path rather than making AccessOnce understand that backend.
 
 ### Frontend authority editing
