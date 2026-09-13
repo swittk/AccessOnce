@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "bindings": [
+    {
+      "source": "src/publication.ts",
+      "sourceDeclarations": [
+        "AccessPublicationAdapter",
+        "PublishAccessChangeArgs",
+        "publishAccessChange",
+        "recoverAccessSnapshot"
+      ],
+      "model": "formal/Publication.tla",
+      "modelActions": [
+        "BeginChange",
+        "WriteSource",
+        "PublishCompiled",
+        "Crash",
+        "Recover"
+      ],
+      "modelInvariants": [
+        "SnapshotNeverBroaderThanSource"
+      ],
+      "sourceSha256": "643d9e2c5280001b46ee38e959d1f36e2da3b085acfafc9187d75897b7b9b0d8",
+      "modelSha256": "a54fce749f705264440726e7f0e7ec31db3b5202aa367f9b918c3d58d5292b47"
+    }
+  ]
+}
