@@ -72,12 +72,14 @@ describe("access control plane", () => {
       expectedRevision: "1",
       source: { grants: ["write"] },
     });
-    expect(access.can(replaced, "read")).toBe(false);
-    expect(access.can(replaced, "write")).toBe(true);
+    expect(replaced.revision).toBe("2");
+    expect(access.can(replaced.snapshot, "read")).toBe(false);
+    expect(access.can(replaced.snapshot, "write")).toBe(true);
 
     const repaired = await control.materialize("alice");
-    expect(access.can(repaired, "write")).toBe(true);
-    expect(store.state().snapshot).toBe(repaired);
+    expect(repaired.revision).toBe("2");
+    expect(access.can(repaired.snapshot, "write")).toBe(true);
+    expect(store.state().snapshot).toBe(repaired.snapshot);
   });
 
   it("publishes an application-owned snapshot shape through the same deny-first control plane", async () => {
@@ -139,12 +141,17 @@ describe("access control plane", () => {
       source: { grants: ["read"] },
     });
     expect(replaced).toEqual({
-      kind: "app-snapshot",
       revision: "8",
-      grants: ["read"],
-      denied: false,
+      snapshot: {
+        kind: "app-snapshot",
+        revision: "8",
+        grants: ["read"],
+        denied: false,
+      },
     });
-    expect(snapshot).toEqual(replaced);
-    expect((await control.materialize("alice")).revision).toBe("8");
+    expect(snapshot).toEqual(replaced.snapshot);
+    const repaired = await control.materialize("alice");
+    expect(repaired.revision).toBe("8");
+    expect(repaired.snapshot.revision).toBe("8");
   });
 });

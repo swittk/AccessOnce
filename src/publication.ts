@@ -10,6 +10,14 @@ export type VersionedAccessSource<Source> = {
   source: Source;
 };
 
+/** Runtime snapshot paired with the durable source revision that produced it. */
+export type VersionedAccessSnapshot<Snapshot> = {
+  /** Durable source revision committed before this final snapshot was published. */
+  revision: string;
+  /** Runtime authorization snapshot corresponding to that exact source revision. */
+  snapshot: Snapshot;
+};
+
 /** Storage contract needed by AccessOnce's fail-closed source/snapshot publication helper. */
 export type AccessPublicationAdapter<Source, Snapshot> = {
   /** Serialize changes for one subject without forcing AccessOnce to know the locking backend. */
@@ -74,7 +82,7 @@ export type PublishAccessSnapshotChangeArgs<Source, Snapshot> = {
  */
 export async function publishAccessSnapshotChange<Source, Snapshot>(
   args: PublishAccessSnapshotChangeArgs<Source, Snapshot>,
-): Promise<Snapshot> {
+): Promise<VersionedAccessSnapshot<Snapshot>> {
   return args.adapter.withSubjectLock(args.subjectId, async () => {
     const current = await args.adapter.readSource(args.subjectId);
     if (current.revision !== args.expectedSourceRevision) {
@@ -99,7 +107,7 @@ export async function publishAccessSnapshotChange<Source, Snapshot>(
       sourceRevision: written.revision,
     });
     await args.adapter.writeSnapshot(args.subjectId, compiled);
-    return compiled;
+    return { revision: written.revision, snapshot: compiled };
   });
 }
 
@@ -108,7 +116,7 @@ export async function recoverPublishedAccessSnapshot<Source, Snapshot>(
   adapter: AccessPublicationAdapter<Source, Snapshot>,
   publication: Pick<AccessSnapshotPublication<Source, Snapshot>, "compile">,
   subjectId: string,
-): Promise<Snapshot> {
+): Promise<VersionedAccessSnapshot<Snapshot>> {
   return adapter.withSubjectLock(subjectId, async () => {
     const current = await adapter.readSource(subjectId);
     const compiled = await publication.compile({
@@ -117,7 +125,7 @@ export async function recoverPublishedAccessSnapshot<Source, Snapshot>(
       sourceRevision: current.revision,
     });
     await adapter.writeSnapshot(subjectId, compiled);
-    return compiled;
+    return { revision: current.revision, snapshot: compiled };
   });
 }
 
@@ -158,7 +166,7 @@ export async function publishAccessChange<
 >(
   args: PublishAccessChangeArgs<Permission, Leaf, Dimension, Attribute, Source>,
 ): Promise<EffectiveAccessSnapshot<Leaf, Dimension, Attribute>> {
-  return publishAccessSnapshotChange({
+  const published = await publishAccessSnapshotChange({
     adapter: args.adapter,
     subjectId: args.subjectId,
     expectedSourceRevision: args.expectedSourceRevision,
@@ -178,6 +186,7 @@ export async function publishAccessChange<
       },
     },
   });
+  return published.snapshot;
 }
 
 /** Native-snapshot convenience wrapper for rebuilding from the current durable source. */
@@ -198,7 +207,7 @@ export async function recoverAccessSnapshot<
     source: Source,
   ) => Omit<CompileAccessArgs<Permission, Dimension, Attribute>, "sourceRevision">,
 ): Promise<EffectiveAccessSnapshot<Leaf, Dimension, Attribute>> {
-  return recoverPublishedAccessSnapshot(
+  const published = await recoverPublishedAccessSnapshot(
     adapter,
     {
       compile({ source, sourceRevision }) {
@@ -210,4 +219,5 @@ export async function recoverAccessSnapshot<
     },
     subjectId,
   );
+  return published.snapshot;
 }

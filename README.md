@@ -166,9 +166,12 @@ const control = createAccessPublicationControlPlane({
     },
   },
 });
+
+const published = await control.replace({ subjectId, expectedRevision, source });
+console.log(published.revision, published.snapshot);
 ```
 
-This is the publication-side equivalent of `access.adapt(...)`: existing snapshot formats do not need to be replaced just to reuse AccessOnce's durability protocol.
+The control plane returns the committed revision separately from the snapshot, so application-owned snapshot formats do not need to embed AccessOnce metadata. This is the publication-side equivalent of `access.adapt(...)`: existing snapshot formats do not need to be replaced just to reuse AccessOnce's durability protocol.
 
 Shared-profile fan-out, occupational-role migration, and infrastructure gateway roles are application concerns: identify the affected subjects and rematerialize them through the app's efficient storage path rather than making AccessOnce understand that backend.
 

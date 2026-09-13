@@ -5,6 +5,7 @@ import {
   recoverPublishedAccessSnapshot,
   type AccessPublicationAdapter,
   type AccessSnapshotPublication,
+  type VersionedAccessSnapshot,
   type VersionedAccessSource,
 } from "./publication.js";
 import type { EffectiveAccessSnapshot } from "./types.js";
@@ -21,9 +22,9 @@ export type AccessControlPlane<Source, Snapshot> = {
     expectedRevision: string;
     /** Complete replacement application source. */
     source: Source;
-  }): Promise<Snapshot>;
+  }): Promise<VersionedAccessSnapshot<Snapshot>>;
   /** Recompile/publish the current durable source without changing it, for repair or invalidation. */
-  materialize(subjectId: string): Promise<Snapshot>;
+  materialize(subjectId: string): Promise<VersionedAccessSnapshot<Snapshot>>;
 };
 
 /** Generic control-plane options for applications that persist their own runtime snapshot shape. */

@@ -481,16 +481,13 @@ export function createAccessGrantControlService<
         options.source.grants(current.source),
         request.mutations,
       );
-      const snapshot = await options.control.replace({
+      const published = await options.control.replace({
         subjectId: request.subjectId,
         expectedRevision: request.expectedRevision,
         source: options.source.withGrants(current.source, grants),
       });
-      if (!snapshot.sourceRevision) {
-        throw new Error("Published AccessOnce snapshot is missing its source revision");
-      }
       return {
-        revision: snapshot.sourceRevision,
+        revision: published.revision,
         grants,
       };
     },
