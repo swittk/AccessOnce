@@ -57,15 +57,21 @@ function sourceDeclarationDigest(sourceText, fileName, names) {
   return textDigest(printed.join("\n\n"));
 }
 
+/** Return whether a TLA+ model defines the exact required symbol at the start of a line. */
+function modelDefines(model, name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  return new RegExp(`^${escaped}\\s*==`, "mu").test(model);
+}
+
 for (const binding of manifest.bindings) {
   const source = await readFile(new URL(`../${binding.source}`, import.meta.url), "utf8");
   const model = await readFile(new URL(`../${binding.model}`, import.meta.url), "utf8");
 
   for (const action of binding.modelActions) {
-    if (!model.includes(`${action} ==`)) failures.push(`${binding.model} missing action ${action}`);
+    if (!modelDefines(model, action)) failures.push(`${binding.model} missing action ${action}`);
   }
   for (const invariant of binding.modelInvariants ?? []) {
-    if (!model.includes(`${invariant} ==`)) failures.push(`${binding.model} missing invariant ${invariant}`);
+    if (!modelDefines(model, invariant)) failures.push(`${binding.model} missing invariant ${invariant}`);
   }
 
   let sourceSha256;

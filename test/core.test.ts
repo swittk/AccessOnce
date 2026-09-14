@@ -494,6 +494,13 @@ describe("AccessOnce core", () => {
 
     expect(() => access.evaluateAt(malformed, 0)).not.toThrow();
     expect(access.evaluateAt(malformed, 0).can("record.read")).toBe(false);
+
+    const missingTimelessGrants = {
+      ...snapshot,
+      grants: null,
+    } as unknown as typeof snapshot;
+    expect(() => access.evaluateAt(missingTimelessGrants, 0)).not.toThrow();
+    expect(access.evaluateAt(missingTimelessGrants, 0).can("record.read")).toBe(false);
   });
 
   it("fails closed for malformed temporal snapshot indexes", () => {

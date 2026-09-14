@@ -129,6 +129,7 @@ export function createAccessEvaluationFactory<
     const transitions = timeline.transitions;
     // Snapshots can cross a transport boundary. Validate the compact collection shell once before iteration.
     if (
+      !Array.isArray(snapshot.grants) ||
       !Array.isArray(grants) ||
       !Array.isArray(grantPositions) ||
       !Array.isArray(initialGrantIndexes) ||

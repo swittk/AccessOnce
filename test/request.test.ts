@@ -6,6 +6,7 @@ import {
   type AccessRequestAuthority,
   type AccessRequestCreate,
   type AccessRequestRecord,
+  type AccessRequestRuleDefinition,
   type AccessRequestStore,
 } from "../src/index.js";
 
@@ -191,6 +192,22 @@ describe("access request rules", () => {
     expect(rule.evaluate({
       authority: relationship("doc-1", "owner", { startsAtEpochMs: 100, endsAtEpochMs: 200 }),
     })).toMatchObject({ requestable: false, reason: "authority-not-requestable" });
+  });
+
+  it("keeps compiled request-rule authority stable if the caller later mutates its definition", () => {
+    const definition: AccessRequestRuleDefinition<Permission, Dimension, Attribute> = {
+      ruleId: "stable-compiled-rule",
+      allow: { kind: "grant", grants: [{ permission: "record.read" }] },
+      approval: { kind: "automatic" },
+    };
+    const rule = access.requestRule(definition);
+    definition.allow = { kind: "relationship", resourceTypes: ["document"], relations: ["reader"] };
+
+    expect(rule.canRequest({ authority: grant({ permission: "record.read" }) })).toBe(true);
+    expect(() => rule.evaluate({
+      authority: relationship("doc-1", "reader"),
+    })).not.toThrow();
+    expect(rule.canRequest({ authority: relationship("doc-1", "reader") })).toBe(false);
   });
 
   it("rejects malformed rule definitions", () => {

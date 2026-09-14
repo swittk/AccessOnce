@@ -404,17 +404,27 @@ export async function sweepAccessRelationshipProjections(
   const due = await adapter.listDue(atEpochMs, limit);
   if (due.length > limit) throw new Error("Relationship projection adapter returned more rows than requested");
   let nextIndex = 0;
+  let failed = false;
+  let failure: unknown;
   const worker = async () => {
-    while (nextIndex < due.length) {
+    while (!failed && nextIndex < due.length) {
       const index = nextIndex;
       nextIndex += 1;
-      await adapter.reconcileAt(due[index]!, atEpochMs);
+      try {
+        await adapter.reconcileAt(due[index]!, atEpochMs);
+      } catch (error) {
+        if (!failed) {
+          failed = true;
+          failure = error;
+        }
+      }
     }
   };
   const workers: Promise<void>[] = [];
   const workerCount = Math.min(concurrency, due.length);
   for (let index = 0; index < workerCount; index += 1) workers.push(worker());
   await Promise.all(workers);
+  if (failed) throw failure;
   return due.length;
 }
 

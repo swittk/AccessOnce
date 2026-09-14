@@ -237,6 +237,50 @@ describe("relationship ACL adapter", () => {
     expect(peak).toBeGreaterThan(1);
   });
 
+  it("stops claiming due projections after the first reconciliation failure and waits for in-flight work", async () => {
+    const targets = Array.from({ length: 8 }, (_, index) => ({
+      resource: { type: "document", id: `d${index}` },
+      relation: "reader",
+    }));
+    let startedCount = 0;
+    let markStarted!: () => void;
+    const initialWorkersStarted = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let releaseInFlight!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseInFlight = resolve;
+    });
+    const reconcileAt = vi.fn(async (target: (typeof targets)[number]) => {
+      startedCount += 1;
+      if (startedCount === 3) markStarted();
+      await initialWorkersStarted;
+      if (target.resource.id === "d0") throw new Error("reconcile failed");
+      await release;
+    });
+
+    const sweep = sweepAccessRelationshipProjections(
+      { listDue: async () => targets, reconcileAt },
+      500,
+      { limit: 8, concurrency: 3 },
+    );
+    await initialWorkersStarted;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(reconcileAt).toHaveBeenCalledTimes(3);
+
+    let settled = false;
+    void sweep.finally(() => {
+      settled = true;
+    }).catch(() => undefined);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseInFlight();
+    await expect(sweep).rejects.toThrow("reconcile failed");
+    expect(reconcileAt).toHaveBeenCalledTimes(3);
+  });
+
   it("forwards an explicit relationship evaluation instant through authorization helpers", async () => {
     const snapshot = compileAccessSnapshot(catalog, { grants: [{ permission: "record.read" }] });
     const evaluator = createAccessEvaluator(catalog);

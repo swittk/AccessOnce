@@ -498,16 +498,18 @@ export function defineAccessRequestRule<Permission extends string, Leaf extends 
   const grantCeilings: RequestAuthorityClause<Leaf, Dimension, Attribute>[] = [];
   let resourceTypes: ReadonlySet<string> | undefined;
   let relations: ReadonlySet<string> | undefined;
-  if (definition.allow.kind === "grant") {
-    if (definition.allow.grants.length === 0) throw new Error("request rule grants must not be empty");
-    for (const ceiling of definition.allow.grants) {
+  const allow = definition.allow;
+  const allowKind = allow.kind;
+  if (allowKind === "grant") {
+    if (allow.grants.length === 0) throw new Error("request rule grants must not be empty");
+    for (const ceiling of allow.grants) {
       validateRequestGrant(catalog, ceiling, "request rule grant ceiling");
       for (const clause of compileRequestGrantClauses(catalog, ceiling)) grantCeilings.push(clause);
     }
     if (grantCeilings.length === 0) throw new Error("request rule grants provide no authority");
   } else {
-    resourceTypes = requestVocabulary(definition.allow.resourceTypes, "request rule resourceTypes");
-    relations = requestVocabulary(definition.allow.relations, "request rule relations");
+    resourceTypes = requestVocabulary(allow.resourceTypes, "request rule resourceTypes");
+    relations = requestVocabulary(allow.relations, "request rule relations");
   }
   const ruleId = definition.ruleId;
   const approval = Object.freeze({ ...definition.approval }) as AccessRequestApproval;
@@ -532,7 +534,7 @@ export function defineAccessRequestRule<Permission extends string, Leaf extends 
       return { requestable: false, reason: "validity-not-requestable" };
     }
 
-    if (definition.allow.kind === "relationship") {
+    if (allowKind === "relationship") {
       if (args.authority.kind !== "relationship") return { requestable: false, reason: "authority-not-requestable" };
       try {
         validateRelationshipRequest(args.authority);
