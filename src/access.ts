@@ -26,9 +26,9 @@ import {
   type CompiledSnapshotAdapter,
 } from "./runtime.js";
 import {
-  defineAccessRequestPolicy,
-  type AccessRequestPolicy,
-  type AccessRequestPolicyDefinition,
+  defineAccessRequestRule,
+  type AccessRequestRule,
+  type AccessRequestRuleDefinition,
 } from "./request.js";
 import type { EffectiveAccessSnapshot } from "./types.js";
 
@@ -56,9 +56,9 @@ export type Access<
   /** Create an empty snapshot for explicit fail-closed publication or bootstrap states. */
   deny(sourceRevision?: string): EffectiveAccessSnapshot<Leaf, Dimension, Attribute>;
   /** Define one cold access-request authority ceiling using the same catalog semantics as normal grants. */
-  requestPolicy(
-    definition: AccessRequestPolicyDefinition<Permission, Dimension, Attribute>,
-  ): AccessRequestPolicy<Permission, Dimension, Attribute>;
+  requestRule(
+    definition: AccessRequestRuleDefinition<Permission, Dimension, Attribute>,
+  ): AccessRequestRule<Permission, Dimension, Attribute>;
   /** Reuse this catalog/evaluator semantics over an application's existing compiled snapshot shape. */
   adapt<Snapshot extends object, Grant>(
     adapter: CompiledSnapshotAdapter<Snapshot, Grant, Leaf, Dimension, Attribute>,
@@ -92,8 +92,8 @@ function createAccessFromCatalog<
         sourceRevision,
       );
     },
-    requestPolicy(definition: AccessRequestPolicyDefinition<Permission, Dimension, Attribute>) {
-      return defineAccessRequestPolicy(catalog, definition);
+    requestRule(definition: AccessRequestRuleDefinition<Permission, Dimension, Attribute>) {
+      return defineAccessRequestRule(catalog, definition);
     },
     adapt<Snapshot extends object, Grant>(
       adapter: CompiledSnapshotAdapter<Snapshot, Grant, Leaf, Dimension, Attribute>,

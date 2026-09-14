@@ -59,15 +59,35 @@ function checkCore(module, label) {
     throw new Error(`${label} build lost source provenance`);
   }
 
-  const requestPolicy = model.requestPolicy({
-    policyId: "consumer-request",
-    ceilings: [{ permission: "read", scope: { location: { kind: "ids", ids: ["a"] } } }],
+  const requestRule = model.requestRule({
+    ruleId: "consumer-request",
+    allow: {
+      kind: "grant",
+      grants: [{ permission: "read", scope: { location: { kind: "ids", ids: ["a"] } } }],
+    },
     approval: { kind: "automatic" },
   });
-  if (!requestPolicy.canRequest({
-    grant: { permission: "read", scope: { location: { kind: "ids", ids: ["a"] } } },
+  if (!requestRule.canRequest({
+    authority: {
+      kind: "grant",
+      grant: { permission: "read", scope: { location: { kind: "ids", ids: ["a"] } } },
+    },
   })) {
-    throw new Error(`${label} build failed request-policy ceiling evaluation`);
+    throw new Error(`${label} build failed request-rule grant evaluation`);
+  }
+  const relationshipRule = model.requestRule({
+    ruleId: "consumer-object-request",
+    allow: { kind: "relationship", resourceTypes: ["document"], relations: ["reader"] },
+    approval: { kind: "policy", policyId: "document-access" },
+  });
+  if (!relationshipRule.canRequest({
+    authority: {
+      kind: "relationship",
+      resource: { type: "document", id: "doc-1" },
+      relation: "reader",
+    },
+  })) {
+    throw new Error(`${label} build failed request-rule relationship evaluation`);
   }
   if (typeof module.createAccessRequestService !== "function") {
     throw new Error(`${label} build is missing access request service`);

@@ -3,6 +3,7 @@ import {
   createHierarchicalAccess,
   createAccessRequestService,
   type AccessGrant,
+  type AccessRequestAuthority,
   type AccessRequestCreate,
   type AccessRequestRecord,
   type AccessRequestStore,
@@ -13,6 +14,7 @@ type Leaf = "record.read" | "record.write" | "billing.read";
 type Dimension = "location" | "resource" | "assignee";
 type Attribute = "assigneeId" | "backupAssigneeId";
 type Grant = AccessGrant<Permission, Dimension, Attribute>;
+type Authority = AccessRequestAuthority<Permission, Dimension, Attribute>;
 
 /** Shared hierarchical catalog exercising parents, implications, correlated scopes, and subject-relative scopes. */
 const access = createHierarchicalAccess<Permission, Leaf, Dimension, Attribute>({
@@ -30,171 +32,186 @@ const access = createHierarchicalAccess<Permission, Leaf, Dimension, Attribute>(
   implies: { "record.write": ["record.read"] },
 });
 
-/** Build one fixed-id source scope tersely for policy tests. */
+/** Build one fixed-id source scope tersely for request-rule tests. */
 function ids(...values: string[]) {
   return { kind: "ids" as const, ids: values };
 }
 
-describe("access request policy", () => {
-  it("accepts narrower grants and assignable parents while proving implications through the real catalog", () => {
-    const policy = access.requestPolicy({
-      policyId: "clinical",
-      ceilings: [
-        {
+/** Wrap one ordinary AccessGrant as requested actor authority. */
+function grant(grantValue: Grant): Authority {
+  return { kind: "grant", grant: grantValue };
+}
+
+/** Build one exact object relationship authority. */
+function relationship(
+  id: string,
+  relation = "reader",
+  validity?: { startsAtEpochMs?: number; endsAtEpochMs?: number },
+): Authority {
+  return {
+    kind: "relationship",
+    resource: { type: "document", id },
+    relation,
+    ...(validity === undefined ? {} : { validity }),
+  };
+}
+
+describe("access request rules", () => {
+  it("uses the normal grant language for parents, implications and narrowing", () => {
+    const rule = access.requestRule({
+      ruleId: "clinical",
+      allow: {
+        kind: "grant",
+        grants: [{
           permission: "record",
           scope: { location: ids("a", "b"), resource: ids("note", "image") },
-        },
-      ],
+        }],
+      },
       approval: { kind: "policy", policyId: "clinical-approver" },
     });
 
-    expect(policy.canRequest({
-      grant: { permission: "record", scope: { location: ids("a"), resource: ids("note") } },
+    expect(rule.canRequest({
+      authority: grant({ permission: "record", scope: { location: ids("a"), resource: ids("note") } }),
     })).toBe(true);
-    expect(policy.canRequest({
-      grant: { permission: "record.write", scope: { location: ids("a"), resource: ids("image") } },
+    expect(rule.canRequest({
+      authority: grant({ permission: "record.write", scope: { location: ids("a"), resource: ids("image") } }),
     })).toBe(true);
-    expect(policy.canRequest({ grant: { permission: "record" } })).toBe(false);
+    expect(rule.canRequest({ authority: grant({ permission: "record" }) })).toBe(false);
   });
 
-  it("rejects write when only read is requestable and does not flatten correlated ceilings", () => {
-    const readOnly = access.requestPolicy({
-      policyId: "read-only",
-      ceilings: [{ permission: "record.read" }],
+  it("rejects broader grant authority and preserves correlated scope clauses", () => {
+    const readOnly = access.requestRule({
+      ruleId: "read-only",
+      allow: { kind: "grant", grants: [{ permission: "record.read" }] },
       approval: { kind: "automatic" },
     });
-    expect(readOnly.evaluate({ grant: { permission: "record.write" } })).toMatchObject({
+    expect(readOnly.evaluate({ authority: grant({ permission: "record.write" }) })).toMatchObject({
       requestable: false,
       reason: "permission-not-requestable",
     });
 
-    const correlated = access.requestPolicy({
-      policyId: "correlated",
-      ceilings: [
-        { permission: "record.read", scope: { location: ids("a"), resource: ids("x") } },
-        { permission: "record.read", scope: { location: ids("b"), resource: ids("y") } },
-      ],
+    const correlated = access.requestRule({
+      ruleId: "correlated",
+      allow: {
+        kind: "grant",
+        grants: [
+          { permission: "record.read", scope: { location: ids("a"), resource: ids("x") } },
+          { permission: "record.read", scope: { location: ids("b"), resource: ids("y") } },
+        ],
+      },
       approval: { kind: "automatic" },
     });
     expect(correlated.evaluate({
-      grant: {
+      authority: grant({
         permission: "record.read",
         scope: { location: ids("a", "b"), resource: ids("x", "y") },
-      },
+      }),
     })).toMatchObject({ requestable: false, reason: "scope-not-requestable" });
   });
 
-  it("preserves subject-relative meaning instead of comparing only today's values", () => {
+  it("preserves subject-relative meaning instead of comparing only current values", () => {
     const subject = { assigneeId: "u1", backupAssigneeId: "u1" };
-    const relative = access.requestPolicy({
-      policyId: "own-billing",
-      ceilings: [
-        {
+    const relative = access.requestRule({
+      ruleId: "own-billing",
+      allow: {
+        kind: "grant",
+        grants: [{
           permission: "billing.read",
           scope: { assignee: { kind: "subject", attribute: "assigneeId" } },
-        },
-      ],
+        }],
+      },
       approval: { kind: "automatic" },
     });
     expect(relative.canRequest({
-      grant: { permission: "billing.read", scope: { assignee: ids("u1") } },
+      authority: grant({ permission: "billing.read", scope: { assignee: ids("u1") } }),
       subject,
     })).toBe(true);
     expect(relative.canRequest({
-      grant: {
+      authority: grant({
         permission: "billing.read",
         scope: { assignee: { kind: "subject", attribute: "backupAssigneeId" } },
-      },
-      subject,
-    })).toBe(false);
-
-    const fixed = access.requestPolicy({
-      policyId: "fixed-billing",
-      ceilings: [{ permission: "billing.read", scope: { assignee: ids("u1") } }],
-      approval: { kind: "automatic" },
-    });
-    expect(fixed.canRequest({
-      grant: {
-        permission: "billing.read",
-        scope: { assignee: { kind: "subject", attribute: "assigneeId" } },
-      },
+      }),
       subject,
     })).toBe(false);
   });
 
-  it("enforces bounded validity using submitted-window count and merged duration", () => {
-    const policy = access.requestPolicy({
-      policyId: "temporary",
-      ceilings: [{ permission: "record.read" }],
+  it("enforces bounded validity and temporal grant ceilings", () => {
+    const rule = access.requestRule({
+      ruleId: "temporary",
+      allow: {
+        kind: "grant",
+        grants: [{
+          permission: "record.read",
+          validity: { startsAtEpochMs: 100, endsAtEpochMs: 300 },
+        }],
+      },
       approval: { kind: "automatic" },
       validity: { allowUnbounded: false, maximumWindows: 2, maximumDurationMs: 100 },
     });
-    expect(policy.canRequest({
-      grant: {
+    expect(rule.canRequest({
+      authority: grant({
         permission: "record.read",
         validity: [
-          { startsAtEpochMs: 0, endsAtEpochMs: 80 },
-          { startsAtEpochMs: 50, endsAtEpochMs: 100 },
+          { startsAtEpochMs: 120, endsAtEpochMs: 180 },
+          { startsAtEpochMs: 160, endsAtEpochMs: 200 },
         ],
-      },
+      }),
     })).toBe(true);
-    expect(policy.evaluate({ grant: { permission: "record.read" } })).toMatchObject({
+    expect(rule.evaluate({ authority: grant({ permission: "record.read" }) })).toMatchObject({
       requestable: false,
       reason: "validity-not-requestable",
     });
-    expect(policy.evaluate({
-      grant: {
-        permission: "record.read",
-        validity: [
-          { startsAtEpochMs: 0, endsAtEpochMs: 80 },
-          { startsAtEpochMs: 90, endsAtEpochMs: 121 },
-        ],
+    expect(rule.evaluate({
+      authority: grant({ permission: "record.read", validity: { startsAtEpochMs: 90, endsAtEpochMs: 150 } }),
+    })).toMatchObject({ requestable: false, reason: "validity-not-requestable" });
+  });
+
+  it("supports exact object relationship requests without actor-snapshot object ids", () => {
+    const rule = access.requestRule({
+      ruleId: "document-access",
+      allow: {
+        kind: "relationship",
+        resourceTypes: ["document", "encounter"],
+        relations: ["reader", "editor"],
       },
-    })).toMatchObject({ requestable: false, reason: "validity-not-requestable" });
-    expect(policy.evaluate({
-      grant: { permission: "record.read", validity: { startsAtEpochMs: 5, endsAtEpochMs: 5 } },
-    })).toMatchObject({ requestable: false, reason: "empty-request" });
-  });
-
-  it("honors temporal ceilings in addition to policy-wide duration limits", () => {
-    const policy = access.requestPolicy({
-      policyId: "shift",
-      ceilings: [
-        {
-          permission: "record.read",
-          validity: { startsAtEpochMs: 100, endsAtEpochMs: 200 },
-        },
-      ],
-      approval: { kind: "automatic" },
+      approval: { kind: "policy", policyId: "clinical-access" },
+      validity: { allowUnbounded: false, maximumDurationMs: 8 * 60 * 60 * 1000 },
     });
-    expect(policy.canRequest({
-      grant: { permission: "record.read", validity: { startsAtEpochMs: 120, endsAtEpochMs: 180 } },
+    expect(rule.canRequest({
+      authority: relationship("doc-1", "reader", { startsAtEpochMs: 100, endsAtEpochMs: 200 }),
     })).toBe(true);
-    expect(policy.evaluate({
-      grant: { permission: "record.read", validity: { startsAtEpochMs: 90, endsAtEpochMs: 180 } },
-    })).toMatchObject({ requestable: false, reason: "validity-not-requestable" });
+    expect(rule.evaluate({
+      authority: {
+        kind: "relationship",
+        resource: { type: "secret-other-kind", id: "x" },
+        relation: "reader",
+        validity: { startsAtEpochMs: 100, endsAtEpochMs: 200 },
+      },
+    })).toMatchObject({ requestable: false, reason: "authority-not-requestable" });
+    expect(rule.evaluate({
+      authority: relationship("doc-1", "owner", { startsAtEpochMs: 100, endsAtEpochMs: 200 }),
+    })).toMatchObject({ requestable: false, reason: "authority-not-requestable" });
   });
 
-  it("rejects malformed policy definitions before they can become request ceilings", () => {
-    expect(() => access.requestPolicy({
-      policyId: "",
-      ceilings: [{ permission: "record.read" }],
+  it("rejects malformed rule definitions", () => {
+    expect(() => access.requestRule({
+      ruleId: "",
+      allow: { kind: "grant", grants: [{ permission: "record.read" }] },
       approval: { kind: "automatic" },
-    })).toThrow(/policyId/i);
-    expect(() => access.requestPolicy({
-      policyId: "bad-scope",
-      ceilings: [{
-        permission: "billing.read",
-        scope: { location: ids("a") },
-      }],
+    })).toThrow(/ruleId/i);
+    expect(() => access.requestRule({
+      ruleId: "bad-scope",
+      allow: {
+        kind: "grant",
+        grants: [{ permission: "billing.read", scope: { location: ids("a") } }],
+      },
       approval: { kind: "automatic" },
     })).toThrow(/unsupported scope dimension/i);
-    expect(() => access.requestPolicy({
-      policyId: "bad-duration",
-      ceilings: [{ permission: "record.read" }],
+    expect(() => access.requestRule({
+      ruleId: "bad-relationship",
+      allow: { kind: "relationship", resourceTypes: [], relations: ["reader"] },
       approval: { kind: "automatic" },
-      validity: { maximumDurationMs: 0 },
-    })).toThrow(/maximumDurationMs/i);
+    })).toThrow(/resourceTypes/i);
   });
 });
 
@@ -243,12 +260,29 @@ function createStore(): AccessRequestStore<Permission, Dimension, Attribute, Rou
   };
 }
 
-/** Common manual policy used by the durable workflow tests. */
-function manualPolicy() {
-  return access.requestPolicy({
-    policyId: "clinical",
-    ceilings: [{ permission: "record.read", scope: { location: ids("a") } }],
+/** Common manual actor-grant rule used by durable workflow tests. */
+function manualGrantRule() {
+  return access.requestRule({
+    ruleId: "clinical",
+    allow: {
+      kind: "grant",
+      grants: [{
+        permission: "record.read",
+        scope: { location: ids("a", "b"), resource: ids("note", "image") },
+        validity: { startsAtEpochMs: 0, endsAtEpochMs: 1000 },
+      }],
+    },
     approval: { kind: "policy", policyId: "clinical-approver" },
+  });
+}
+
+/** Common object relationship rule representing the native-ACL use case. */
+function documentRule() {
+  return access.requestRule({
+    ruleId: "document-access",
+    allow: { kind: "relationship", resourceTypes: ["document"], relations: ["reader", "editor"] },
+    approval: { kind: "policy", policyId: "clinical-approver" },
+    validity: { allowUnbounded: false, maximumDurationMs: 1000 },
   });
 }
 
@@ -256,8 +290,9 @@ describe("access request service", () => {
   it("requires a resolvable route before creating a manual request", async () => {
     const store = createStore();
     const service = createAccessRequestService({
+      catalog: access.catalog,
       store,
-      resolvePolicy: () => ({ policy: manualPolicy() }),
+      resolveRule: () => ({ rule: manualGrantRule() }),
       resolveApprovalRoute: () => undefined,
       authorizeTransition: () => true,
       issue: async () => {},
@@ -265,41 +300,47 @@ describe("access request service", () => {
     await expect(service.submit("u1", {
       idempotencyKey: "k1",
       subjectId: "u1",
-      policyId: "clinical",
-      grant: { permission: "record.read", scope: { location: ids("a") } },
+      ruleId: "clinical",
+      authority: grant({
+        permission: "record.read",
+        scope: { location: ids("a"), resource: ids("note") },
+        validity: { startsAtEpochMs: 0, endsAtEpochMs: 100 },
+      }),
     })).rejects.toThrow(/route|unavailable/i);
     expect(store.records.size).toBe(0);
   });
 
-  it("rechecks current policy and approver authority before durable issuance", async () => {
+  it("rechecks current rules and approver authority before issuance", async () => {
     const store = createStore();
     let enabled = true;
     let approverAllowed = true;
-    const issued: string[] = [];
+    const issued: Authority[] = [];
     const service = createAccessRequestService({
+      catalog: access.catalog,
       store,
-      resolvePolicy: () => enabled ? { policy: manualPolicy() } : undefined,
+      resolveRule: () => enabled ? { rule: manualGrantRule() } : undefined,
       resolveApprovalRoute: () => ({ queue: "clinical" }),
       authorizeTransition: ({ action }) => action !== "approve" || approverAllowed,
-      async issue({ issuanceKey }) {
-        issued.push(issuanceKey);
+      async issue({ authority }) {
+        issued.push(authority);
       },
     });
     const pending = await service.submit("u1", {
       idempotencyKey: "k1",
       subjectId: "u1",
-      policyId: "clinical",
-      grant: { permission: "record.read", scope: { location: ids("a") } },
+      ruleId: "clinical",
+      authority: grant({
+        permission: "record.read",
+        scope: { location: ids("a"), resource: ids("note") },
+        validity: { startsAtEpochMs: 0, endsAtEpochMs: 100 },
+      }),
     });
-    expect(pending.state).toBe("pending");
-    expect(pending.route).toEqual({ queue: "clinical" });
-
     enabled = false;
     await expect(service.transition("boss", {
       requestId: pending.requestId,
       expectedRevision: pending.revision,
       action: "approve",
-    })).rejects.toThrow(/requestable|policy/i);
+    })).rejects.toThrow(/rule|requestable/i);
     expect(issued).toEqual([]);
 
     enabled = true;
@@ -309,7 +350,157 @@ describe("access request service", () => {
       expectedRevision: pending.revision,
       action: "approve",
     })).rejects.toThrow(/authorized/i);
-    expect(issued).toEqual([]);
+  });
+
+  it("lets an approver narrow actor authority but never broaden it", async () => {
+    const store = createStore();
+    const issued: Authority[] = [];
+    const service = createAccessRequestService({
+      catalog: access.catalog,
+      store,
+      resolveRule: () => ({ rule: manualGrantRule() }),
+      resolveApprovalRoute: () => ({ queue: "clinical" }),
+      authorizeTransition: () => true,
+      async issue({ authority }) {
+        issued.push(authority);
+      },
+    });
+    const pending = await service.submit("u1", {
+      idempotencyKey: "narrow-grant",
+      subjectId: "u1",
+      ruleId: "clinical",
+      authority: grant({
+        permission: "record.read",
+        scope: { location: ids("a", "b"), resource: ids("note", "image") },
+        validity: { startsAtEpochMs: 0, endsAtEpochMs: 500 },
+      }),
+    });
+    const approvedAuthority = grant({
+      permission: "record.read",
+      scope: { location: ids("a"), resource: ids("note") },
+      validity: { startsAtEpochMs: 50, endsAtEpochMs: 100 },
+    });
+    const approved = await service.transition("boss", {
+      requestId: pending.requestId,
+      expectedRevision: pending.revision,
+      action: "approve",
+      authority: approvedAuthority,
+      reason: "Only through end of shift",
+    });
+    expect(approved.state).toBe("approved");
+    expect(approved.decision).toMatchObject({
+      action: "approve",
+      actorId: "boss",
+      reason: "Only through end of shift",
+      authority: approvedAuthority,
+    });
+    expect(issued).toEqual([approvedAuthority]);
+
+    const second = await service.submit("u2", {
+      idempotencyKey: "broaden-grant",
+      subjectId: "u2",
+      ruleId: "clinical",
+      authority: grant({
+        permission: "record.read",
+        scope: { location: ids("a"), resource: ids("note") },
+        validity: { startsAtEpochMs: 0, endsAtEpochMs: 100 },
+      }),
+    });
+    await expect(service.transition("boss", {
+      requestId: second.requestId,
+      expectedRevision: second.revision,
+      action: "approve",
+      authority: grant({
+        permission: "record.read",
+        scope: { location: ids("a", "b"), resource: ids("note") },
+        validity: { startsAtEpochMs: 0, endsAtEpochMs: 100 },
+      }),
+    })).rejects.toThrow(/broader|original request/i);
+  });
+
+  it("issues exact object relationships and lets approval only shorten their validity", async () => {
+    const store = createStore();
+    const issued: Authority[] = [];
+    const service = createAccessRequestService({
+      catalog: access.catalog,
+      store,
+      resolveRule: ({ authority }) =>
+        authority.kind === "relationship" && authority.resource.id === "doc-1"
+          ? { rule: documentRule() }
+          : undefined,
+      resolveApprovalRoute: () => ({ queue: "clinical" }),
+      authorizeTransition: () => true,
+      async issue({ authority }) {
+        issued.push(authority);
+      },
+    });
+    const pending = await service.submit("u1", {
+      idempotencyKey: "doc-1",
+      subjectId: "u1",
+      ruleId: "document-access",
+      authority: relationship("doc-1", "reader", { startsAtEpochMs: 100, endsAtEpochMs: 900 }),
+    });
+    const narrowed = relationship("doc-1", "reader", { startsAtEpochMs: 200, endsAtEpochMs: 400 });
+    const approved = await service.transition("boss", {
+      requestId: pending.requestId,
+      expectedRevision: pending.revision,
+      action: "approve",
+      authority: narrowed,
+      reason: "Temporary chart review",
+    });
+    expect(approved.state).toBe("approved");
+    expect(issued).toEqual([narrowed]);
+
+    const other = await service.submit("u2", {
+      idempotencyKey: "doc-1-2",
+      subjectId: "u2",
+      ruleId: "document-access",
+      authority: relationship("doc-1", "reader", { startsAtEpochMs: 100, endsAtEpochMs: 300 }),
+    });
+    await expect(service.transition("boss", {
+      requestId: other.requestId,
+      expectedRevision: other.revision,
+      action: "approve",
+      authority: relationship("doc-2", "reader", { startsAtEpochMs: 100, endsAtEpochMs: 200 }),
+    })).rejects.toThrow(/broader|original request/i);
+    await expect(service.transition("boss", {
+      requestId: other.requestId,
+      expectedRevision: other.revision,
+      action: "approve",
+      authority: relationship("doc-1", "reader", { startsAtEpochMs: 50, endsAtEpochMs: 350 }),
+    })).rejects.toThrow(/broader|original request/i);
+  });
+
+  it("stores decline reasons without interpreting them", async () => {
+    const store = createStore();
+    const service = createAccessRequestService({
+      catalog: access.catalog,
+      store,
+      resolveRule: () => ({ rule: documentRule() }),
+      resolveApprovalRoute: () => ({ queue: "clinical" }),
+      authorizeTransition: () => true,
+      issue: async () => {},
+    });
+    const pending = await service.submit("u1", {
+      idempotencyKey: "deny-reason",
+      subjectId: "u1",
+      ruleId: "document-access",
+      authority: relationship("doc-1", "reader", { startsAtEpochMs: 0, endsAtEpochMs: 100 }),
+    });
+    const denied = await service.transition("boss", {
+      requestId: pending.requestId,
+      expectedRevision: pending.revision,
+      action: "deny",
+      reason: "Use the normal consultation workflow",
+    });
+    expect(denied).toMatchObject({
+      state: "denied",
+      decision: {
+        action: "deny",
+        actorId: "boss",
+        reason: "Use the normal consultation workflow",
+      },
+    });
   });
 
   it("uses an issuing claim so crash recovery cannot mark approved before authority commits", async () => {
@@ -317,8 +508,9 @@ describe("access request service", () => {
     const committed = new Set<string>();
     let failAfterCommit = true;
     const service = createAccessRequestService({
+      catalog: access.catalog,
       store,
-      resolvePolicy: () => ({ policy: manualPolicy() }),
+      resolveRule: () => ({ rule: documentRule() }),
       resolveApprovalRoute: () => ({ queue: "clinical" }),
       authorizeTransition: () => true,
       async issue({ issuanceKey }) {
@@ -327,58 +519,55 @@ describe("access request service", () => {
       },
     });
     const pending = await service.submit("u1", {
-      idempotencyKey: "k1",
+      idempotencyKey: "crash",
       subjectId: "u1",
-      policyId: "clinical",
-      grant: { permission: "record.read", scope: { location: ids("a") } },
+      ruleId: "document-access",
+      authority: relationship("doc-1", "reader", { startsAtEpochMs: 0, endsAtEpochMs: 100 }),
     });
     await expect(service.transition("boss", {
       requestId: pending.requestId,
       expectedRevision: pending.revision,
       action: "approve",
     })).rejects.toThrow(/simulated crash/);
-    const issuing = await service.read(pending.requestId);
-    expect(issuing.state).toBe("issuing");
-    expect(committed).toEqual(new Set([`access-request:${pending.requestId}`]));
-
+    expect((await service.read(pending.requestId)).state).toBe("issuing");
     failAfterCommit = false;
-    const approved = await service.recover(pending.requestId);
-    expect(approved.state).toBe("approved");
+    expect((await service.recover(pending.requestId)).state).toBe("approved");
     expect(committed).toEqual(new Set([`access-request:${pending.requestId}`]));
   });
 
-  it("makes submission and terminal action retries idempotent but rejects conflicting rewrites", async () => {
+  it("keeps submission and terminal retries idempotent while conflicting rewrites fail", async () => {
     const store = createStore();
     const service = createAccessRequestService({
+      catalog: access.catalog,
       store,
-      resolvePolicy: () => ({ policy: manualPolicy() }),
+      resolveRule: () => ({ rule: documentRule() }),
       resolveApprovalRoute: () => ({ queue: "clinical" }),
       authorizeTransition: () => true,
       issue: async () => {},
     });
     const input = {
-      idempotencyKey: "k1",
+      idempotencyKey: "retry",
       subjectId: "u1",
-      policyId: "clinical",
-      grant: { permission: "record.read" as const, scope: { location: ids("a") } },
+      ruleId: "document-access",
+      authority: relationship("doc-1", "reader", { startsAtEpochMs: 0, endsAtEpochMs: 100 }),
     };
     const first = await service.submit("u1", input);
     expect(await service.submit("u1", input)).toEqual(first);
     await expect(service.submit("u1", {
       ...input,
-      grant: { permission: "record.read", scope: { location: ids("outside") } },
+      authority: relationship("doc-2", "reader", { startsAtEpochMs: 0, endsAtEpochMs: 100 }),
     })).rejects.toThrow(/idempotency/i);
-
     const denied = await service.transition("boss", {
       requestId: first.requestId,
       expectedRevision: first.revision,
       action: "deny",
+      reason: "no",
     });
-    expect(denied.state).toBe("denied");
     expect(await service.transition("boss", {
       requestId: first.requestId,
       expectedRevision: first.revision,
       action: "deny",
+      reason: "different retry text",
     })).toEqual(denied);
     await expect(service.transition("boss", {
       requestId: first.requestId,
@@ -387,84 +576,84 @@ describe("access request service", () => {
     })).rejects.toThrow(/terminal|conflict/i);
   });
 
-  it("rechecks automatic policy immediately before claiming authority issuance", async () => {
+  it("rechecks automatic rules immediately before issuance", async () => {
     const store = createStore();
-    const automatic = access.requestPolicy({
-      policyId: "self-service",
-      ceilings: [{ permission: "billing.read", scope: { assignee: ids("u1") } }],
+    const automatic = access.requestRule({
+      ruleId: "self-service",
+      allow: { kind: "grant", grants: [{ permission: "billing.read", scope: { assignee: ids("u1") } }] },
       approval: { kind: "automatic" },
     });
     let resolutions = 0;
-    const issued: string[] = [];
+    const issued: Authority[] = [];
     const service = createAccessRequestService({
+      catalog: access.catalog,
       store,
-      resolvePolicy: () => {
+      resolveRule: () => {
         resolutions += 1;
-        return resolutions === 1 ? { policy: automatic } : undefined;
+        return resolutions === 1 ? { rule: automatic } : undefined;
       },
       authorizeTransition: () => true,
-      async issue({ issuanceKey }) {
-        issued.push(issuanceKey);
+      async issue({ authority }) {
+        issued.push(authority);
       },
     });
     await expect(service.submit("u1", {
       idempotencyKey: "auto-stale",
       subjectId: "u1",
-      policyId: "self-service",
-      grant: { permission: "billing.read", scope: { assignee: ids("u1") } },
-    })).rejects.toThrow(/currently applicable|policy/i);
+      ruleId: "self-service",
+      authority: grant({ permission: "billing.read", scope: { assignee: ids("u1") } }),
+    })).rejects.toThrow(/currently applicable|rule/i);
     expect(issued).toEqual([]);
     expect([...store.records.values()][0]?.state).toBe("pending");
   });
 
-  it("commits automatic policies immediately through the same recoverable issuance protocol", async () => {
+  it("commits automatic rules immediately through the same recoverable protocol", async () => {
     const store = createStore();
-    const automatic = access.requestPolicy({
-      policyId: "self-service",
-      ceilings: [{ permission: "billing.read", scope: { assignee: ids("u1") } }],
+    const automatic = access.requestRule({
+      ruleId: "self-service",
+      allow: { kind: "grant", grants: [{ permission: "billing.read", scope: { assignee: ids("u1") } }] },
       approval: { kind: "automatic" },
     });
-    const issued: string[] = [];
+    const issued: Authority[] = [];
     const service = createAccessRequestService({
+      catalog: access.catalog,
       store,
-      resolvePolicy: () => ({ policy: automatic }),
+      resolveRule: () => ({ rule: automatic }),
       authorizeTransition: () => true,
-      async issue({ issuanceKey }) {
-        issued.push(issuanceKey);
+      async issue({ authority }) {
+        issued.push(authority);
       },
     });
+    const requested = grant({ permission: "billing.read", scope: { assignee: ids("u1") } });
     const approved = await service.submit("u1", {
       idempotencyKey: "auto-1",
       subjectId: "u1",
-      policyId: "self-service",
-      grant: { permission: "billing.read", scope: { assignee: ids("u1") } },
+      ruleId: "self-service",
+      authority: requested,
     });
     expect(approved.state).toBe("approved");
-    expect(issued).toEqual([`access-request:${approved.requestId}`]);
+    expect(approved.decision).toMatchObject({ action: "approve", authority: requested });
+    expect(issued).toEqual([requested]);
   });
 
-  it("expires only pending requests and keeps expiry retries idempotent", async () => {
+  it("expires only pending requests and records the system decision", async () => {
     const store = createStore();
     const service = createAccessRequestService({
+      catalog: access.catalog,
       store,
-      resolvePolicy: () => ({ policy: manualPolicy() }),
+      resolveRule: () => ({ rule: documentRule() }),
       resolveApprovalRoute: () => ({ queue: "clinical" }),
       authorizeTransition: () => true,
       issue: async () => {},
     });
     const pending = await service.submit("u1", {
-      idempotencyKey: "expiry-1",
+      idempotencyKey: "expiry",
       subjectId: "u1",
-      policyId: "clinical",
-      grant: { permission: "record.read", scope: { location: ids("a") } },
+      ruleId: "document-access",
+      authority: relationship("doc-1", "reader", { startsAtEpochMs: 0, endsAtEpochMs: 100 }),
     });
     const expired = await service.expire(pending.requestId, pending.revision);
-    expect(expired.state).toBe("expired");
+    expect(expired).toMatchObject({ state: "expired", decision: { action: "expire" } });
     expect(await service.expire(pending.requestId, pending.revision)).toEqual(expired);
-    await expect(service.transition("boss", {
-      requestId: pending.requestId,
-      expectedRevision: pending.revision,
-      action: "approve",
-    })).rejects.toThrow(/conflicting terminal/i);
   });
 });

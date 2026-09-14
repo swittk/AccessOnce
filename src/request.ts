@@ -1,5 +1,6 @@
 import type { AccessCatalog } from "./catalog.js";
 import { compileAccessSnapshot } from "./compiler.js";
+import type { AccessRelationshipResource } from "./relationship.js";
 import type {
   AccessGrant,
   AccessScopeSource,
@@ -8,7 +9,7 @@ import type {
   CompiledAccessGrant,
 } from "./types.js";
 
-/** Application-owned approval routing decision attached to one request policy. */
+/** Application-owned approval routing decision attached to one request rule. */
 export type AccessRequestApproval =
   | {
       /** Automatically commit valid requests without a human approval route. */
@@ -21,7 +22,7 @@ export type AccessRequestApproval =
       policyId: string;
     };
 
-/** Optional policy-wide bounds on temporal authority a requester may ask for. */
+/** Optional rule-wide bounds on temporal authority a requester may ask for. */
 export type AccessRequestValidityLimits = {
   /** Whether timeless or one-sided validity may be requested; defaults to true unless duration is bounded. */
   allowUnbounded?: boolean;
@@ -31,37 +32,102 @@ export type AccessRequestValidityLimits = {
   maximumDurationMs?: number;
 };
 
-/** Declarative authority ceiling selected by an application for one request workflow. */
-export type AccessRequestPolicyDefinition<
+/** Grant authority that can be requested from the actor snapshot plane. */
+export type AccessGrantRequestAuthority<
   Permission extends string,
   Dimension extends string,
   Attribute extends string = string,
 > = {
-  /** Stable application-owned request policy identifier. */
-  policyId: string;
+  /** Discriminator for compiled actor authority. */
+  kind: "grant";
+  /** Exact grant requested for the access subject. */
+  grant: AccessGrant<Permission, Dimension, Attribute>;
+};
+
+/** Exact object relationship that can be requested from the high-cardinality ACL plane. */
+export type AccessRelationshipRequestAuthority = {
+  /** Discriminator for object/resource relationship authority. */
+  kind: "relationship";
+  /** Exact object whose relationship is requested. */
+  resource: AccessRelationshipResource;
+  /** Application-defined relation such as reader or editor. */
+  relation: string;
+  /** Optional temporal validity for this exact relationship. */
+  validity?: AccessValidity | readonly AccessValidity[];
+};
+
+/** Authority requested through the control plane without changing the hot evaluator. */
+export type AccessRequestAuthority<
+  Permission extends string,
+  Dimension extends string,
+  Attribute extends string = string,
+> =
+  | AccessGrantRequestAuthority<Permission, Dimension, Attribute>
+  | AccessRelationshipRequestAuthority;
+
+/** Grant-plane authority allowed by one request rule. */
+export type AccessGrantRequestAllowance<
+  Permission extends string,
+  Dimension extends string,
+  Attribute extends string = string,
+> = {
+  /** Discriminator for actor-grant request rules. */
+  kind: "grant";
   /** Grants whose compiled authority forms the maximum requestable union. */
-  ceilings: readonly AccessGrant<Permission, Dimension, Attribute>[];
+  grants: readonly AccessGrant<Permission, Dimension, Attribute>[];
+};
+
+/** Object relationship vocabulary allowed by one request rule. Exact object applicability remains application-owned. */
+export type AccessRelationshipRequestAllowance = {
+  /** Discriminator for object relationship request rules. */
+  kind: "relationship";
+  /** Resource namespaces this rule may target, for example document or encounter. */
+  resourceTypes: readonly string[];
+  /** Relationships this rule may request, for example reader or editor. */
+  relations: readonly string[];
+};
+
+/** Maximum authority vocabulary for one application-selected request rule. */
+export type AccessRequestAllowance<
+  Permission extends string,
+  Dimension extends string,
+  Attribute extends string = string,
+> =
+  | AccessGrantRequestAllowance<Permission, Dimension, Attribute>
+  | AccessRelationshipRequestAllowance;
+
+/** Declarative rule selected by an application for one request workflow. */
+export type AccessRequestRuleDefinition<
+  Permission extends string,
+  Dimension extends string,
+  Attribute extends string = string,
+> = {
+  /** Stable application-owned request rule identifier. */
+  ruleId: string;
+  /** Maximum grant or relationship vocabulary this workflow can request. */
+  allow: AccessRequestAllowance<Permission, Dimension, Attribute>;
   /** Automatic or application-routed approval behavior. */
   approval: AccessRequestApproval;
-  /** Optional temporal limits applied in addition to grant-ceiling validity. */
+  /** Optional temporal limits applied to either authority kind. */
   validity?: AccessRequestValidityLimits;
 };
 
-/** Coarse fail-closed reason returned when a requested authority is outside its selected policy. */
+/** Coarse fail-closed reason returned when requested authority is outside its selected rule. */
 export type AccessRequestDenialReason =
   | "invalid-request"
   | "empty-request"
+  | "authority-not-requestable"
   | "permission-not-requestable"
   | "scope-not-requestable"
   | "validity-not-requestable";
 
-/** Result of checking one exact requested grant against an application-selected request policy. */
+/** Result of checking one exact requested authority against an application-selected request rule. */
 export type AccessRequestEvaluation =
   | {
-      /** True when every compiled permission/scope/time clause is within the policy ceiling. */
+      /** True when the exact authority is within the rule. */
       requestable: true;
-      /** Stable policy that proved the request. */
-      policyId: string;
+      /** Stable rule that proved the request. */
+      ruleId: string;
       /** Approval behavior to use when the request is submitted. */
       approval: AccessRequestApproval;
     }
@@ -72,33 +138,33 @@ export type AccessRequestEvaluation =
       reason: AccessRequestDenialReason;
     };
 
-/** Trusted subject attributes used only to resolve subject-relative request-ceiling comparisons. */
+/** Trusted subject attributes used only to resolve subject-relative grant comparisons. */
 export type AccessRequestSubject<Attribute extends string> = Readonly<
   Partial<Record<Attribute, string>>
 >;
 
-/** Cold request-policy evaluator; applications decide whether this policy is applicable or advertised. */
-export type AccessRequestPolicy<
+/** Cold request rule evaluator; applications decide whether this rule is applicable or advertised. */
+export type AccessRequestRule<
   Permission extends string,
   Dimension extends string,
   Attribute extends string = string,
 > = {
-  /** Stable application-owned policy identifier. */
-  readonly policyId: string;
-  /** Approval behavior carried by this policy. */
+  /** Stable application-owned rule identifier. */
+  readonly ruleId: string;
+  /** Approval behavior carried by this rule. */
   readonly approval: AccessRequestApproval;
-  /** Evaluate one exact requested grant against the compiled authority ceiling. */
+  /** Evaluate one exact authority against the rule. */
   evaluate(args: {
-    /** Exact authority being requested. */
-    grant: AccessGrant<Permission, Dimension, Attribute>;
-    /** Current subject values needed only for subject-relative ceiling proof. */
+    /** Exact actor grant or object relationship being requested. */
+    authority: AccessRequestAuthority<Permission, Dimension, Attribute>;
+    /** Current subject values needed only for subject-relative grant proof. */
     subject?: AccessRequestSubject<Attribute>;
   }): AccessRequestEvaluation;
   /** Boolean convenience for callers that do not need the coarse denial reason. */
   canRequest(args: {
-    /** Exact authority being requested. */
-    grant: AccessGrant<Permission, Dimension, Attribute>;
-    /** Current subject values needed only for subject-relative ceiling proof. */
+    /** Exact actor grant or object relationship being requested. */
+    authority: AccessRequestAuthority<Permission, Dimension, Attribute>;
+    /** Current subject values needed only for subject-relative grant proof. */
     subject?: AccessRequestSubject<Attribute>;
   }): boolean;
 };
@@ -329,57 +395,166 @@ function requestWithinValidityLimits(
   return true;
 }
 
-/** Create a cold request ceiling that proves exact AccessGrant authority without touching the hot evaluator. */
-export function defineAccessRequestPolicy<Permission extends string, Leaf extends Permission, Dimension extends string, Attribute extends string = string>(
+/** Require a non-empty unique vocabulary list for relationship request rules. */
+function requestVocabulary(values: readonly string[], label: string): ReadonlySet<string> {
+  if (values.length === 0) throw new Error(`${label} must not be empty`);
+  const result = new Set<string>();
+  for (const value of values) {
+    if (!value.trim()) throw new Error(`${label} must contain non-empty strings`);
+    result.add(value);
+  }
+  return result;
+}
+
+/** Return the validity carried by either supported request authority kind. */
+function requestAuthorityValidity<Permission extends string, Dimension extends string, Attribute extends string>(
+  authority: AccessRequestAuthority<Permission, Dimension, Attribute>,
+): AccessValidity | readonly AccessValidity[] | undefined {
+  return authority.kind === "grant" ? authority.grant.validity : authority.validity;
+}
+
+/** Validate one relationship request without interpreting application resource/relation semantics. */
+function validateRelationshipRequest(authority: AccessRelationshipRequestAuthority): void {
+  if (!authority.resource.type.trim()) throw new Error("relationship resource type must not be empty");
+  if (!authority.resource.id.trim()) throw new Error("relationship resource id must not be empty");
+  if (!authority.relation.trim()) throw new Error("relationship relation must not be empty");
+  normalizeRequestValidity(authority.validity);
+}
+
+/** Prove that one approved grant is no broader than the originally requested grant. */
+function grantRequestWithinRequest<Permission extends string, Leaf extends Permission, Dimension extends string, Attribute extends string>(
   catalog: AccessCatalog<Permission, Leaf, Dimension>,
-  definition: AccessRequestPolicyDefinition<Permission, Dimension, Attribute>,
-): AccessRequestPolicy<Permission, Dimension, Attribute> {
-  if (!definition.policyId.trim()) throw new Error("request policyId must not be empty");
-  if (definition.ceilings.length === 0) throw new Error("request policy ceilings must not be empty");
+  approved: AccessGrant<Permission, Dimension, Attribute>,
+  requested: AccessGrant<Permission, Dimension, Attribute>,
+  subject: AccessRequestSubject<Attribute> | undefined,
+): boolean {
+  try {
+    validateRequestGrant(catalog, approved, "approved access request");
+    validateRequestGrant(catalog, requested, "original access request");
+    const approvedClauses = compileRequestGrantClauses(catalog, approved);
+    const requestedClauses = compileRequestGrantClauses(catalog, requested);
+    if (approvedClauses.length === 0) return false;
+    for (const approvedClause of approvedClauses) {
+      let covered = false;
+      for (const requestedClause of requestedClauses) {
+        if (approvedClause.grant.permission !== requestedClause.grant.permission) continue;
+        if (!requestScopeCovered(approvedClause.grant.constraints, requestedClause.grant.constraints, subject)) continue;
+        if (!requestValidityCovered(approvedClause.windows, requestedClause.windows)) continue;
+        covered = true;
+        break;
+      }
+      if (!covered) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Prove that approved authority is equal to or narrower than what the requester actually asked for. */
+function requestAuthorityWithinRequest<Permission extends string, Leaf extends Permission, Dimension extends string, Attribute extends string>(
+  catalog: AccessCatalog<Permission, Leaf, Dimension>,
+  approved: AccessRequestAuthority<Permission, Dimension, Attribute>,
+  requested: AccessRequestAuthority<Permission, Dimension, Attribute>,
+  subject: AccessRequestSubject<Attribute> | undefined,
+): boolean {
+  if (approved.kind !== requested.kind) return false;
+  if (approved.kind === "grant" && requested.kind === "grant") {
+    return grantRequestWithinRequest(catalog, approved.grant, requested.grant, subject);
+  }
+  if (approved.kind !== "relationship" || requested.kind !== "relationship") return false;
+  try {
+    validateRelationshipRequest(approved);
+    validateRelationshipRequest(requested);
+  } catch {
+    return false;
+  }
+  if (
+    approved.resource.type !== requested.resource.type ||
+    approved.resource.id !== requested.resource.id ||
+    approved.relation !== requested.relation
+  ) return false;
+  const approvedValidity = normalizeRequestValidity(approved.validity);
+  const requestedValidity = normalizeRequestValidity(requested.validity);
+  return approvedValidity.windows.length > 0 && requestValidityCovered(approvedValidity.windows, requestedValidity.windows);
+}
+
+/** Create a cold request rule that proves actor grants or exact object relationships without touching the hot evaluator. */
+export function defineAccessRequestRule<Permission extends string, Leaf extends Permission, Dimension extends string, Attribute extends string = string>(
+  catalog: AccessCatalog<Permission, Leaf, Dimension>,
+  definition: AccessRequestRuleDefinition<Permission, Dimension, Attribute>,
+): AccessRequestRule<Permission, Dimension, Attribute> {
+  if (!definition.ruleId.trim()) throw new Error("request ruleId must not be empty");
   if (definition.approval.kind === "policy" && !definition.approval.policyId.trim()) {
     throw new Error("request approval policyId must not be empty");
   }
   requirePositiveSafeInteger(definition.validity?.maximumWindows, "maximumWindows");
   requirePositiveSafeInteger(definition.validity?.maximumDurationMs, "maximumDurationMs");
 
-  const ceilings: RequestAuthorityClause<Leaf, Dimension, Attribute>[] = [];
-  for (const ceiling of definition.ceilings) {
-    validateRequestGrant(catalog, ceiling, "request policy ceiling");
-    for (const clause of compileRequestGrantClauses(catalog, ceiling)) ceilings.push(clause);
+  const grantCeilings: RequestAuthorityClause<Leaf, Dimension, Attribute>[] = [];
+  let resourceTypes: ReadonlySet<string> | undefined;
+  let relations: ReadonlySet<string> | undefined;
+  if (definition.allow.kind === "grant") {
+    if (definition.allow.grants.length === 0) throw new Error("request rule grants must not be empty");
+    for (const ceiling of definition.allow.grants) {
+      validateRequestGrant(catalog, ceiling, "request rule grant ceiling");
+      for (const clause of compileRequestGrantClauses(catalog, ceiling)) grantCeilings.push(clause);
+    }
+    if (grantCeilings.length === 0) throw new Error("request rule grants provide no authority");
+  } else {
+    resourceTypes = requestVocabulary(definition.allow.resourceTypes, "request rule resourceTypes");
+    relations = requestVocabulary(definition.allow.relations, "request rule relations");
   }
-  if (ceilings.length === 0) throw new Error("request policy ceilings grant no authority");
-  const policyId = definition.policyId;
+  const ruleId = definition.ruleId;
   const approval = Object.freeze({ ...definition.approval }) as AccessRequestApproval;
   const limits = definition.validity === undefined ? undefined : Object.freeze({ ...definition.validity });
 
-  /** Evaluate one grant using the immutable compiled policy ceiling. */
+  /** Evaluate one authority using the immutable compiled rule. */
   function evaluate(args: {
-    /** Exact authority being requested. */
-    grant: AccessGrant<Permission, Dimension, Attribute>;
-    /** Current subject values needed for subject-relative proof. */
+    /** Exact actor grant or object relationship being requested. */
+    authority: AccessRequestAuthority<Permission, Dimension, Attribute>;
+    /** Current subject values needed for subject-relative grant proof. */
     subject?: AccessRequestSubject<Attribute>;
   }): AccessRequestEvaluation {
-    let requested: readonly RequestAuthorityClause<Leaf, Dimension, Attribute>[];
     let validity: RequestValiditySummary;
     try {
-      validateRequestGrant(catalog, args.grant, "access request");
-      validity = normalizeRequestValidity(args.grant.validity);
-      requested = compileRequestGrantClauses(catalog, args.grant);
+      validity = normalizeRequestValidity(requestAuthorityValidity(args.authority));
     } catch {
       return { requestable: false, reason: "invalid-request" };
     }
-    if (requested.length === 0 || validity.windows.length === 0) {
-      return { requestable: false, reason: "empty-request" };
-    }
+    if (validity.windows.length === 0) return { requestable: false, reason: "empty-request" };
     if (!requestWithinValidityLimits(validity, limits)) {
       return { requestable: false, reason: "validity-not-requestable" };
     }
+
+    if (definition.allow.kind === "relationship") {
+      if (args.authority.kind !== "relationship") return { requestable: false, reason: "authority-not-requestable" };
+      try {
+        validateRelationshipRequest(args.authority);
+      } catch {
+        return { requestable: false, reason: "invalid-request" };
+      }
+      if (!resourceTypes!.has(args.authority.resource.type) || !relations!.has(args.authority.relation)) {
+        return { requestable: false, reason: "authority-not-requestable" };
+      }
+      return { requestable: true, ruleId, approval };
+    }
+
+    if (args.authority.kind !== "grant") return { requestable: false, reason: "authority-not-requestable" };
+    let requested: readonly RequestAuthorityClause<Leaf, Dimension, Attribute>[];
+    try {
+      validateRequestGrant(catalog, args.authority.grant, "access request");
+      requested = compileRequestGrantClauses(catalog, args.authority.grant);
+    } catch {
+      return { requestable: false, reason: "invalid-request" };
+    }
+    if (requested.length === 0) return { requestable: false, reason: "empty-request" };
 
     for (const requestClause of requested) {
       let permissionMatch = false;
       let scopeMatch = false;
       let validityMatch = false;
-      for (const ceilingClause of ceilings) {
+      for (const ceilingClause of grantCeilings) {
         if (ceilingClause.grant.permission !== requestClause.grant.permission) continue;
         permissionMatch = true;
         if (!requestScopeCovered(
@@ -396,11 +571,11 @@ export function defineAccessRequestPolicy<Permission extends string, Leaf extend
       if (!scopeMatch) return { requestable: false, reason: "scope-not-requestable" };
       if (!validityMatch) return { requestable: false, reason: "validity-not-requestable" };
     }
-    return { requestable: true, policyId, approval };
+    return { requestable: true, ruleId, approval };
   }
 
   return Object.freeze({
-    policyId,
+    ruleId,
     approval,
     evaluate,
     canRequest(args) {
@@ -413,25 +588,41 @@ export function defineAccessRequestPolicy<Permission extends string, Leaf extend
 export type AccessRequestSubmit<Permission extends string, Dimension extends string, Attribute extends string = string> = {
   /** Caller-generated retry key unique for this requester. */
   idempotencyKey: string;
-  /** Subject whose authority would change when the request is approved. */
+  /** Subject/principal whose authority would change when approved. */
   subjectId: string;
-  /** Application-selected request policy that must currently apply. */
-  policyId: string;
-  /** Exact AccessOnce authority being requested. */
-  grant: AccessGrant<Permission, Dimension, Attribute>;
+  /** Application-selected request rule that must currently apply. */
+  ruleId: string;
+  /** Exact actor grant or object relationship requested. */
+  authority: AccessRequestAuthority<Permission, Dimension, Attribute>;
 };
 
 /** User-facing terminal action supported by the request transition wire. */
 export type AccessRequestTransitionAction = "approve" | "deny" | "cancel";
 
+/** Durable audit decision attached when a request leaves pending state. */
+export type AccessRequestDecision<Permission extends string, Dimension extends string, Attribute extends string = string> = {
+  /** Terminal or issuance-starting decision. */
+  action: AccessRequestTransitionAction | "expire";
+  /** Authenticated actor responsible for a user decision; omitted for automatic/system actions. */
+  actorId?: string;
+  /** Optional application-facing explanation retained for audit/UI. */
+  reason?: string;
+  /** Exact authority selected for approval; omitted for non-approve decisions. */
+  authority?: AccessRequestAuthority<Permission, Dimension, Attribute>;
+};
+
 /** Optimistic transition request used by approval/cancellation endpoints. */
-export type AccessRequestTransition = {
+export type AccessRequestTransition<Permission extends string, Dimension extends string, Attribute extends string = string> = {
   /** Durable request being transitioned. */
   requestId: string;
   /** Revision loaded by the actor before taking this action. */
   expectedRevision: string;
   /** Requested lifecycle action. */
   action: AccessRequestTransitionAction;
+  /** Optional narrower approved authority; omitted means approve exactly what was requested. */
+  authority?: AccessRequestAuthority<Permission, Dimension, Attribute>;
+  /** Optional durable decision explanation. */
+  reason?: string;
 };
 
 /** Durable access-request lifecycle including one internal recoverable authority-issuance state. */
@@ -452,6 +643,8 @@ export type AccessRequestCreate<
   state: AccessRequestState;
   /** Optional application-owned queue/routing token for manual approval. */
   route?: Route;
+  /** Durable approval/denial/cancellation/expiry audit decision once present. */
+  decision?: AccessRequestDecision<Permission, Dimension, Attribute>;
 };
 
 /** Versioned durable access-request record returned by the application store. */
@@ -491,7 +684,7 @@ export type AccessRequestStore<
   withRequestLock<Result>(requestId: string, work: () => Promise<Result>): Promise<Result>;
   /** Read one request by its stable durable id. */
   read(requestId: string): Promise<AccessRequestRecord<Permission, Dimension, Attribute, Route> | undefined>;
-  /** Read an earlier submission without re-evaluating policy, so retries stay idempotent across policy changes. */
+  /** Read an earlier submission without re-evaluating rules, so retries stay idempotent across rule changes. */
   readByIdempotency(
     requesterId: string,
     idempotencyKey: string,
@@ -508,11 +701,11 @@ export type AccessRequestStore<
   ): Promise<AccessRequestRecord<Permission, Dimension, Attribute, Route>>;
 };
 
-/** Current application resolution for a request policy, including subject values needed by relative ceilings. */
-export type AccessRequestPolicyResolution<Permission extends string, Dimension extends string, Attribute extends string = string> = {
-  /** Application-selected policy that currently applies. */
-  policy: AccessRequestPolicy<Permission, Dimension, Attribute>;
-  /** Current subject attributes used by subject-relative request ceilings. */
+/** Current application resolution for a request rule, including subject values needed by relative grant ceilings. */
+export type AccessRequestRuleResolution<Permission extends string, Dimension extends string, Attribute extends string = string> = {
+  /** Application-selected rule that currently applies. */
+  rule: AccessRequestRule<Permission, Dimension, Attribute>;
+  /** Current subject attributes used by subject-relative grant ceilings. */
   subject?: AccessRequestSubject<Attribute>;
 };
 
@@ -520,13 +713,13 @@ export type AccessRequestPolicyResolution<Permission extends string, Dimension e
 export type AccessRequestRouteContext<Permission extends string, Dimension extends string, Attribute extends string = string> = {
   /** Authenticated actor submitting the request. */
   requesterId: string;
-  /** Access subject that would receive the grant. */
+  /** Access subject/principal that would receive authority. */
   subjectId: string;
-  /** Exact authority requested. */
-  grant: AccessGrant<Permission, Dimension, Attribute>;
-  /** Current request policy selected by the application. */
-  policy: AccessRequestPolicy<Permission, Dimension, Attribute>;
-  /** Current subject values used while proving the request. */
+  /** Exact requested authority. */
+  authority: AccessRequestAuthority<Permission, Dimension, Attribute>;
+  /** Current request rule selected by the application. */
+  rule: AccessRequestRule<Permission, Dimension, Attribute>;
+  /** Current subject values used while proving grant authority. */
   subject?: AccessRequestSubject<Attribute>;
 };
 
@@ -543,8 +736,10 @@ export type AccessRequestTransitionAuthorization<
   action: AccessRequestTransitionAction;
   /** Current durable request. */
   request: AccessRequestRecord<Permission, Dimension, Attribute, Route>;
-  /** Current policy resolution for approve actions; omitted for deny/cancel. */
-  resolution?: AccessRequestPolicyResolution<Permission, Dimension, Attribute>;
+  /** Authority selected for approval after narrowing; omitted for deny/cancel. */
+  authority?: AccessRequestAuthority<Permission, Dimension, Attribute>;
+  /** Current rule resolution for approve actions; omitted for deny/cancel. */
+  resolution?: AccessRequestRuleResolution<Permission, Dimension, Attribute>;
 };
 
 /** Exact authority-issuance command emitted only after a durable approval claim exists. */
@@ -558,6 +753,8 @@ export type AccessRequestIssuance<
   issuanceKey: string;
   /** Durable request whose approval is being committed. */
   request: AccessRequestRecord<Permission, Dimension, Attribute, Route>;
+  /** Exact approved actor grant or object relationship to publish through the application's ordinary authority path. */
+  authority: AccessRequestAuthority<Permission, Dimension, Attribute>;
 };
 
 /** Durable access-request service exposed to application endpoints and recovery jobs. */
@@ -567,7 +764,7 @@ export type AccessRequestService<
   Attribute extends string = string,
   Route = unknown,
 > = {
-  /** Submit exact authority for the authenticated requester; automatic policies commit immediately. */
+  /** Submit exact authority for the authenticated requester; automatic rules commit immediately. */
   submit(
     requesterId: string,
     request: AccessRequestSubmit<Permission, Dimension, Attribute>,
@@ -577,7 +774,7 @@ export type AccessRequestService<
   /** Apply approve/deny/cancel with optimistic revision and idempotent same-terminal retries. */
   transition(
     actorId: string,
-    transition: AccessRequestTransition,
+    transition: AccessRequestTransition<Permission, Dimension, Attribute>,
   ): Promise<AccessRequestRecord<Permission, Dimension, Attribute, Route>>;
   /** Expire a still-pending request from an application scheduler or maintenance job. */
   expire(
@@ -593,10 +790,15 @@ export function accessRequestIssuanceKey(requestId: string): string {
   return `access-request:${requestId}`;
 }
 
-/** Canonicalize one direct request grant for idempotency-key replay comparison. */
-function accessRequestGrantKey<Permission extends string, Dimension extends string, Attribute extends string>(
-  grant: AccessGrant<Permission, Dimension, Attribute>,
+/** Canonicalize one request authority for idempotency-key replay comparison. */
+function accessRequestAuthorityKey<Permission extends string, Dimension extends string, Attribute extends string>(
+  authority: AccessRequestAuthority<Permission, Dimension, Attribute>,
 ): string {
+  if (authority.kind === "relationship") {
+    const validity = normalizeRequestValidity(authority.validity);
+    return JSON.stringify(["relationship", authority.resource.type, authority.resource.id, authority.relation, validity.windows]);
+  }
+  const grant = authority.grant;
   const scope: [string, string, readonly string[] | string][] = [];
   if (grant.scope) {
     const dimensions = Object.keys(grant.scope);
@@ -614,7 +816,7 @@ function accessRequestGrantKey<Permission extends string, Dimension extends stri
     }
   }
   const validity = normalizeRequestValidity(grant.validity);
-  return JSON.stringify([grant.permission, scope, validity.windows]);
+  return JSON.stringify(["grant", grant.permission, scope, validity.windows]);
 }
 
 /** Require that an idempotency-key winner represents the same submitted authority, not a different reused request. */
@@ -626,43 +828,49 @@ function assertSameRequestSubmission<Permission extends string, Dimension extend
   if (
     existing.requesterId !== requesterId ||
     existing.subjectId !== request.subjectId ||
-    existing.policyId !== request.policyId ||
-    accessRequestGrantKey(existing.grant) !== accessRequestGrantKey(request.grant)
+    existing.ruleId !== request.ruleId ||
+    accessRequestAuthorityKey(existing.authority) !== accessRequestAuthorityKey(request.authority)
   ) {
     throw new Error("access request idempotency key was already used for different authority");
   }
 }
 
-/** Return a copy of one request with only its lifecycle state changed. */
+/** Return a copy of one request with lifecycle/decision changes while preserving the original requested authority. */
 function requestWithState<Permission extends string, Dimension extends string, Attribute extends string, Route>(
   request: AccessRequestRecord<Permission, Dimension, Attribute, Route>,
   state: AccessRequestState,
+  decision: AccessRequestDecision<Permission, Dimension, Attribute> | undefined = request.decision,
 ): AccessRequestCreate<Permission, Dimension, Attribute, Route> {
   return {
     requesterId: request.requesterId,
     idempotencyKey: request.idempotencyKey,
     subjectId: request.subjectId,
-    policyId: request.policyId,
-    grant: request.grant,
+    ruleId: request.ruleId,
+    authority: request.authority,
     approval: request.approval,
     state,
     ...(request.route === undefined ? {} : { route: request.route }),
+    ...(decision === undefined ? {} : { decision }),
   };
 }
 
 /** Build the generic durable approval service without choosing a database, organization model, or transport. */
-export function createAccessRequestService<Permission extends string, Dimension extends string, Attribute extends string = string, Route = unknown>(options: {
+export function createAccessRequestService<Permission extends string, Leaf extends Permission, Dimension extends string, Attribute extends string = string, Route = unknown>(options: {
+  /** Catalog used only for cold approval-narrowing proofs between actor grants. */
+  catalog: AccessCatalog<Permission, Leaf, Dimension>;
   /** Durable request storage and per-request serialization supplied by the application. */
   store: AccessRequestStore<Permission, Dimension, Attribute, Route>;
-  /** Resolve the currently applicable policy; returning undefined makes the request unavailable. */
-  resolvePolicy(args: {
+  /** Resolve the currently applicable rule; returning undefined makes the request unavailable. */
+  resolveRule(args: {
     /** Authenticated original requester. */
     requesterId: string;
-    /** Access subject that would receive authority. */
+    /** Access subject/principal that would receive authority. */
     subjectId: string;
-    /** Stable policy identifier saved with the request. */
-    policyId: string;
-  }): AccessRequestPolicyResolution<Permission, Dimension, Attribute> | undefined | Promise<AccessRequestPolicyResolution<Permission, Dimension, Attribute> | undefined>;
+    /** Stable rule identifier saved with the request. */
+    ruleId: string;
+    /** Original exact authority requested, allowing the host to apply object/context-specific applicability. */
+    authority: AccessRequestAuthority<Permission, Dimension, Attribute>;
+  }): AccessRequestRuleResolution<Permission, Dimension, Attribute> | undefined | Promise<AccessRequestRuleResolution<Permission, Dimension, Attribute> | undefined>;
   /** Resolve a concrete application queue/route before accepting manual requests. */
   resolveApprovalRoute?: (
     args: AccessRequestRouteContext<Permission, Dimension, Attribute>,
@@ -671,7 +879,7 @@ export function createAccessRequestService<Permission extends string, Dimension 
   authorizeTransition(
     args: AccessRequestTransitionAuthorization<Permission, Dimension, Attribute, Route>,
   ): boolean | Promise<boolean>;
-  /** Durably issue the exact requested grant; repeated issuanceKey calls must be idempotent. */
+  /** Durably issue exact approved authority; relationship issuers should use their canonical relationship mutation/projection path. */
   issue(
     args: AccessRequestIssuance<Permission, Dimension, Attribute, Route>,
   ): Promise<void>;
@@ -683,20 +891,22 @@ export function createAccessRequestService<Permission extends string, Dimension 
     return request;
   }
 
-  /** Resolve the current app-selected policy and require that it still proves this exact request. */
-  async function requireCurrentPolicy(
-    request: Pick<AccessRequestCreate<Permission, Dimension, Attribute, Route>, "requesterId" | "subjectId" | "policyId" | "grant">,
-  ): Promise<AccessRequestPolicyResolution<Permission, Dimension, Attribute>> {
-    const resolution = await options.resolvePolicy({
+  /** Resolve the current app-selected rule and require that it still proves the selected approval authority. */
+  async function requireCurrentRule(
+    request: Pick<AccessRequestCreate<Permission, Dimension, Attribute, Route>, "requesterId" | "subjectId" | "ruleId" | "authority">,
+    authority: AccessRequestAuthority<Permission, Dimension, Attribute>,
+  ): Promise<AccessRequestRuleResolution<Permission, Dimension, Attribute>> {
+    const resolution = await options.resolveRule({
       requesterId: request.requesterId,
       subjectId: request.subjectId,
-      policyId: request.policyId,
+      ruleId: request.ruleId,
+      authority: request.authority,
     });
-    if (!resolution || resolution.policy.policyId !== request.policyId) {
-      throw new Error("access request policy is not currently applicable");
+    if (!resolution || resolution.rule.ruleId !== request.ruleId) {
+      throw new Error("access request rule is not currently applicable");
     }
-    const evaluation = resolution.policy.evaluate({
-      grant: request.grant,
+    const evaluation = resolution.rule.evaluate({
+      authority,
       ...(resolution.subject === undefined ? {} : { subject: resolution.subject }),
     });
     if (!evaluation.requestable) {
@@ -710,7 +920,10 @@ export function createAccessRequestService<Permission extends string, Dimension 
     request: AccessRequestRecord<Permission, Dimension, Attribute, Route>,
   ): Promise<AccessRequestRecord<Permission, Dimension, Attribute, Route>> {
     if (request.state !== "issuing") throw new Error("access request is not issuing");
-    await options.issue({ issuanceKey: accessRequestIssuanceKey(request.requestId), request });
+    const authority = request.decision?.action === "approve" && request.decision.authority
+      ? request.decision.authority
+      : request.authority;
+    await options.issue({ issuanceKey: accessRequestIssuanceKey(request.requestId), request, authority });
     return options.store.compareAndSet(
       request.requestId,
       request.revision,
@@ -724,14 +937,14 @@ export function createAccessRequestService<Permission extends string, Dimension 
     if (current.state === "issuing") return finishIssuance(current);
     if (current.state !== "pending" || current.approval.kind !== "automatic") return current;
 
-    const resolution = await requireCurrentPolicy(current);
-    if (resolution.policy.approval.kind !== "automatic") {
-      throw new Error("access request approval policy changed before automatic issuance");
+    const resolution = await requireCurrentRule(current, current.authority);
+    if (resolution.rule.approval.kind !== "automatic") {
+      throw new Error("access request approval rule changed before automatic issuance");
     }
     current = await options.store.compareAndSet(
       current.requestId,
       current.revision,
-      requestWithState(current, "issuing"),
+      requestWithState(current, "issuing", { action: "approve", authority: current.authority }),
     );
     return finishIssuance(current);
   }
@@ -741,7 +954,7 @@ export function createAccessRequestService<Permission extends string, Dimension 
       if (!requesterId.trim()) throw new Error("requesterId must not be empty");
       if (!request.idempotencyKey.trim()) throw new Error("idempotencyKey must not be empty");
       if (!request.subjectId.trim()) throw new Error("subjectId must not be empty");
-      if (!request.policyId.trim()) throw new Error("policyId must not be empty");
+      if (!request.ruleId.trim()) throw new Error("ruleId must not be empty");
 
       const existing = await options.store.readByIdempotency(requesterId, request.idempotencyKey);
       if (existing) {
@@ -755,16 +968,17 @@ export function createAccessRequestService<Permission extends string, Dimension 
         return existing;
       }
 
-      const resolution = await options.resolvePolicy({
+      const resolution = await options.resolveRule({
         requesterId,
         subjectId: request.subjectId,
-        policyId: request.policyId,
+        ruleId: request.ruleId,
+        authority: request.authority,
       });
-      if (!resolution || resolution.policy.policyId !== request.policyId) {
-        throw new Error("access request policy is unavailable");
+      if (!resolution || resolution.rule.ruleId !== request.ruleId) {
+        throw new Error("access request rule is unavailable");
       }
-      const evaluation = resolution.policy.evaluate({
-        grant: request.grant,
+      const evaluation = resolution.rule.evaluate({
+        authority: request.authority,
         ...(resolution.subject === undefined ? {} : { subject: resolution.subject }),
       });
       if (!evaluation.requestable) {
@@ -777,8 +991,8 @@ export function createAccessRequestService<Permission extends string, Dimension 
         route = await options.resolveApprovalRoute({
           requesterId,
           subjectId: request.subjectId,
-          grant: request.grant,
-          policy: resolution.policy,
+          authority: request.authority,
+          rule: resolution.rule,
           ...(resolution.subject === undefined ? {} : { subject: resolution.subject }),
         });
         if (route === undefined) throw new Error("access request approval route is unavailable");
@@ -788,10 +1002,9 @@ export function createAccessRequestService<Permission extends string, Dimension 
         requesterId,
         idempotencyKey: request.idempotencyKey,
         subjectId: request.subjectId,
-        policyId: request.policyId,
-        grant: request.grant,
+        ruleId: request.ruleId,
+        authority: request.authority,
         approval: evaluation.approval,
-        // Creation records the request only; automatic approval is claimed after a fresh policy check under lock.
         state: "pending",
         ...(route === undefined ? {} : { route }),
       });
@@ -814,6 +1027,12 @@ export function createAccessRequestService<Permission extends string, Dimension 
 
     async transition(actorId, transition) {
       if (!actorId.trim()) throw new Error("actorId must not be empty");
+      if (transition.reason !== undefined && !transition.reason.trim()) {
+        throw new Error("access request transition reason must not be empty when supplied");
+      }
+      if (transition.action !== "approve" && transition.authority !== undefined) {
+        throw new Error("only approve may select narrower authority");
+      }
       return options.store.withRequestLock(transition.requestId, async () => {
         let current = await requireRequest(transition.requestId);
         const sameTerminal =
@@ -832,12 +1051,20 @@ export function createAccessRequestService<Permission extends string, Dimension 
           throw new Error("access request changed since this action loaded");
         }
 
-        let resolution: AccessRequestPolicyResolution<Permission, Dimension, Attribute> | undefined;
-        if (transition.action === "approve") resolution = await requireCurrentPolicy(current);
+        let resolution: AccessRequestRuleResolution<Permission, Dimension, Attribute> | undefined;
+        let approvedAuthority: AccessRequestAuthority<Permission, Dimension, Attribute> | undefined;
+        if (transition.action === "approve") {
+          approvedAuthority = transition.authority ?? current.authority;
+          resolution = await requireCurrentRule(current, approvedAuthority);
+          if (!requestAuthorityWithinRequest(options.catalog, approvedAuthority, current.authority, resolution.subject)) {
+            throw new Error("approved access request authority must not be broader than the original request");
+          }
+        }
         const authorized = await options.authorizeTransition({
           actorId,
           action: transition.action,
           request: current,
+          ...(approvedAuthority === undefined ? {} : { authority: approvedAuthority }),
           ...(resolution === undefined ? {} : { resolution }),
         });
         if (!authorized) throw new Error("actor is not authorized for this access request transition");
@@ -846,14 +1073,23 @@ export function createAccessRequestService<Permission extends string, Dimension 
           return options.store.compareAndSet(
             current.requestId,
             current.revision,
-            requestWithState(current, transition.action === "deny" ? "denied" : "cancelled"),
+            requestWithState(current, transition.action === "deny" ? "denied" : "cancelled", {
+              action: transition.action,
+              actorId,
+              ...(transition.reason === undefined ? {} : { reason: transition.reason }),
+            }),
           );
         }
 
         current = await options.store.compareAndSet(
           current.requestId,
           current.revision,
-          requestWithState(current, "issuing"),
+          requestWithState(current, "issuing", {
+            action: "approve",
+            actorId,
+            authority: approvedAuthority!,
+            ...(transition.reason === undefined ? {} : { reason: transition.reason }),
+          }),
         );
         return finishIssuance(current);
       });
@@ -870,7 +1106,7 @@ export function createAccessRequestService<Permission extends string, Dimension 
         return options.store.compareAndSet(
           requestId,
           current.revision,
-          requestWithState(current, "expired"),
+          requestWithState(current, "expired", { action: "expire" }),
         );
       });
     },

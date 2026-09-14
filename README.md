@@ -256,17 +256,22 @@ High-cardinality explicit object ACLs use `AccessRelationshipAdapter` for checks
 
 ### Access requests and approval
 
-Requestability is a **cold control-plane concern**, not a fallback inside `can()`. The application decides which request policies apply and which buttons/catalog entries to advertise. AccessOnce only proves that the exact requested `AccessGrant` is inside an application-selected authority ceiling.
+Requestability is a **cold control-plane concern**, not a fallback inside `can()`. The application decides which request rules apply and which buttons/catalog entries to advertise. A request rule is simply the maximum kind of authority one workflow is allowed to ask for.
+
+Actor-grant workflows reuse the normal `AccessGrant` language:
 
 ```ts
-const temporaryRecords = access.requestPolicy({
-  policyId: "temporary-record-read",
-  ceilings: [
-    {
-      permission: "record.read",
-      scope: { location: { kind: "ids", ids: ["site-a", "site-b"] } },
-    },
-  ],
+const temporaryRecords = access.requestRule({
+  ruleId: "temporary-record-read",
+  allow: {
+    kind: "grant",
+    grants: [
+      {
+        permission: "record.read",
+        scope: { location: { kind: "ids", ids: ["site-a", "site-b"] } },
+      },
+    ],
+  },
   approval: { kind: "policy", policyId: "record-access" },
   validity: {
     allowUnbounded: false,
@@ -276,46 +281,94 @@ const temporaryRecords = access.requestPolicy({
 });
 ```
 
-The ceiling is compiled through the same catalog as ordinary authority. Parent assignments and implications therefore have identical meaning in requests and runtime authorization. Correlated scopes stay correlated: a ceiling containing `(site-a AND type-x) OR (site-b AND type-y)` does not silently authorize the cross-product. Subject-relative scopes preserve their semantic attribute identity rather than comparing only today's resolved values.
+The allowed grant union is compiled through the same catalog as ordinary authority. Parent assignments and implications therefore have identical meaning in requests and runtime authorization. Correlated scopes stay correlated, and subject-relative scopes preserve semantic attribute identity.
 
-A durable service adds idempotent submission, current-policy re-check on approval, application-owned routing, optimistic transitions, and recoverable authority issuance:
+High-cardinality object access is requested through the existing relationship plane instead of putting object ids into actor snapshots:
+
+```ts
+const documentAccess = access.requestRule({
+  ruleId: "document-access",
+  allow: {
+    kind: "relationship",
+    resourceTypes: ["document", "encounter"],
+    relations: ["reader", "editor"],
+  },
+  approval: { kind: "policy", policyId: "clinical-access" },
+  validity: { allowUnbounded: false, maximumDurationMs: 8 * 60 * 60 * 1000 },
+});
+```
+
+The rule intentionally does not enumerate object ids. The application decides whether the rule applies to the exact requested resource, which prevents AccessOnce from becoming a hidden-object discovery oracle.
+
+A durable service adds idempotent submission, current-rule re-check on approval, application-owned routing, optimistic transitions, decision reasons, approval narrowing, and recoverable authority issuance:
 
 ```ts
 const requests = createAccessRequestService({
+  catalog: access.catalog,
   store: myRequestStore,
 
-  async resolvePolicy({ policyId, requesterId, subjectId }) {
-    if (!applicationAllowsPolicy(requesterId, subjectId, policyId)) return undefined;
-    return { policy: temporaryRecords, subject: await loadSubjectAttributes(subjectId) };
+  async resolveRule({ ruleId, requesterId, subjectId, authority }) {
+    if (!applicationAllowsRequest(requesterId, subjectId, ruleId, authority)) return undefined;
+    return { rule: ruleId === "document-access" ? documentAccess : temporaryRecords };
   },
 
-  async resolveApprovalRoute({ requesterId, subjectId }) {
-    return resolveCurrentApprovalQueue(requesterId, subjectId); // undefined => unavailable
+  async resolveApprovalRoute({ requesterId, subjectId, authority }) {
+    return resolveCurrentApprovalQueue(requesterId, subjectId, authority);
   },
 
-  async authorizeTransition({ actorId, action, request }) {
-    return actorMayTransitionRequest(actorId, action, request);
+  async authorizeTransition({ actorId, action, request, authority }) {
+    return actorMayTransitionRequest(actorId, action, request, authority);
   },
 
-  async issue({ issuanceKey, request }) {
-    // Must be durable + idempotent by issuanceKey and must publish this exact grant
-    // through the application's ordinary authority source/materialization path.
-    await publishRequestedGrant({
-      issuanceKey,
-      subjectId: request.subjectId,
-      grant: request.grant,
-    });
+  async issue({ issuanceKey, request, authority }) {
+    if (authority.kind === "grant") {
+      await publishRequestedGrant({
+        issuanceKey,
+        subjectId: request.subjectId,
+        grant: authority.grant,
+      });
+      return;
+    }
+
+    await relationshipStore.mutate([{
+      operation: "add",
+      principal: principalForSubject(request.subjectId),
+      resource: authority.resource,
+      relation: authority.relation,
+      ...(authority.validity === undefined ? {} : { validity: authority.validity }),
+    }]);
+    // A backend whose native ACL cannot encode time reconciles its physical ACL projection here.
   },
+});
+```
+
+Approvers may approve exactly what was requested or choose **equal-or-narrower authority**. Grant approval may reduce scope and/or duration. Relationship approval must keep the same subject, object, and relation but may shorten its temporal validity. The approved authority is proven both against the original request and against the current request rule before issuance.
+
+```ts
+await client.approve({
+  requestId,
+  expectedRevision,
+  authority: {
+    kind: "relationship",
+    resource: { type: "document", id: "doc-123" },
+    relation: "reader",
+    validity: { endsAtEpochMs: endOfShift },
+  },
+  reason: "Approved through end of shift",
+});
+
+await client.deny({
+  requestId,
+  expectedRevision,
+  reason: "Use the normal consultation workflow",
 });
 ```
 
 `pending -> issuing -> approved` contains one deliberately internal durability step. `issuing` means approval has been durably claimed but the exact ordinary authority publication may need recovery. The service writes `approved` **only after** the idempotent issuer succeeds. A crash after authority publication leaves `issuing`; `recover(requestId)` retries the same stable `access-request:<requestId>` issuance key and then commits `approved`. Deny/cancel/expire are terminal from `pending`; conflicting terminal rewrites fail while same-terminal retries are idempotent.
 
-Automatic policies use the same protocol: submission first records `pending`, then re-checks the current policy under the request's serialization boundary before claiming `issuing`. They are never falsely persisted as `approved` before authority exists. Manual policies must resolve an application route before request creation, so a request does not silently fall into an unowned queue. The requester does not choose an approver unless the application deliberately builds that behavior.
+Automatic rules use the same protocol: submission first records `pending`, then re-checks the current rule under the request's serialization boundary before claiming `issuing`. Manual rules must resolve an application route before request creation, so a request does not silently fall into an unowned queue.
 
-`createAccessRequestControlClient()` supplies only `submit`, `read`, `transition`, `approve`, `deny`, and `cancel`. It intentionally has no global list/catalog method: queue indexes and the decision to advertise a request are application concerns. Requester/approver identity should come from the authenticated endpoint context rather than being trusted from the JSON wire.
-
-The current request engine requests actor `AccessGrant` authority only. It deliberately does **not** turn object IDs into actor grants. High-cardinality object-specific requests belong with the relationship/ACL plane and should be implemented as a relationship request workflow when a product actually needs them. Likewise, a request endpoint must not become an oracle for otherwise hidden object existence.
+`createAccessRequestControlClient()` supplies only `submit`, `read`, `transition`, `approve`, `deny`, and `cancel`. It intentionally has no global list/catalog method: queue indexes and the decision to advertise a request are application concerns. Requester/approver identity should come from authenticated endpoint context rather than being trusted from the JSON wire.
 
 ### 2. Effective-snapshot client transport
 
