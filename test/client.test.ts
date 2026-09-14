@@ -126,6 +126,29 @@ describe("access snapshot client", () => {
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 
+  it("rejects refreshForSubject asynchronously when subject identity calculation fails", async () => {
+    const failure = new Error("invalid edited subject identity");
+    const client = createAccessSnapshotClient({
+      subjectKey(subject: string) {
+        if (subject === "broken") throw failure;
+        return subject;
+      },
+      transport: {
+        async read(subject: string) {
+          return { subject };
+        },
+      },
+    });
+
+    await client.setSubject("alice");
+    let refresh: Promise<{ subject: string } | undefined> | undefined;
+    expect(() => {
+      refresh = client.refreshForSubject("broken");
+    }).not.toThrow();
+    await expect(refresh).rejects.toBe(failure);
+    expect(client.getSnapshot()).toEqual({ subject: "alice" });
+  });
+
   it("clears authority immediately on logout", async () => {
     const client = createAccessSnapshotClient({
       transport: {

@@ -95,7 +95,7 @@ describe("AccessOnce core", () => {
         "record.write": ["billing.read"],
       },
     });
-    const snapshot = compileAccessSnapshot(crossTreeCatalog, {
+    const snapshot = compileAccessSnapshot<Permission, Leaf, Dimension, Attribute>(crossTreeCatalog, {
       grants: [{
         permission: "record",
         scope: { location: { kind: "ids", ids: ["site-a"] } },
@@ -134,7 +134,7 @@ describe("AccessOnce core", () => {
     recordReadDimensions.push("resource");
     writeImplications.splice(0);
 
-    const snapshot = compileAccessSnapshot(stableCatalog, {
+    const snapshot = compileAccessSnapshot<Permission, Leaf, Dimension, Attribute>(stableCatalog, {
       grants: [{ permission: "record.write", scope: { location: { kind: "ids", ids: ["site-a"] } } }],
     });
     const access = createAccessEvaluator<Permission, Leaf, Dimension, Attribute>(stableCatalog);
@@ -323,7 +323,7 @@ describe("AccessOnce core", () => {
 
     // Catalog scope metadata drives editors. Typed/adapted source grants are not revalidated here;
     // an unexpected extra scope is fail-closed narrowing rather than accidental broader access.
-    const narrowed = compileAccessSnapshot(catalog, {
+    const narrowed = compileAccessSnapshot<Permission, Leaf, Dimension, Attribute>(catalog, {
       grants: [{ permission: "billing.read", scope: { resource: { kind: "ids", ids: ["x"] } } }],
     });
     const access = createAccessEvaluator<Permission, Leaf, Dimension, Attribute>(catalog);
@@ -407,7 +407,8 @@ describe("AccessOnce core", () => {
       catalogId: "temporal-union-test",
       catalogVersion: 1,
       compilerVersion: 1,
-      permissions: ["record.read"],
+      wildcard: "*",
+      permissions: ["*", "record.read"],
       leaves: ["record.read"],
       scopeDimensions: { "record.read": ["location"] },
     });
@@ -466,12 +467,39 @@ describe("AccessOnce core", () => {
     expect(expired.can("billing.read", { location: "site-a" })).toBe(false);
   });
 
+  it("fails closed for malformed temporal snapshot collection shapes", () => {
+    const access = createHierarchicalAccess({
+      catalogId: "temporal-malformed-shape-test",
+      catalogVersion: 1,
+      compilerVersion: 1,
+      wildcard: "*",
+      permissions: ["*", "record.read"],
+      leaves: ["record.read"],
+      scopeDimensions: { "record.read": [] },
+    });
+    const snapshot = access.compile({ grants: [{
+      permission: "record.read",
+      validity: { endsAtEpochMs: 10 },
+    }] });
+    const malformed = {
+      ...snapshot,
+      temporal: {
+        ...snapshot.temporal!,
+        transitions: null,
+      },
+    } as unknown as typeof snapshot;
+
+    expect(() => access.evaluateAt(malformed, 0)).not.toThrow();
+    expect(access.evaluateAt(malformed, 0).can("record.read")).toBe(false);
+  });
+
   it("fails closed for malformed temporal snapshot indexes", () => {
     const access = createHierarchicalAccess({
       catalogId: "temporal-malformed-test",
       catalogVersion: 1,
       compilerVersion: 1,
-      permissions: ["record.read"],
+      wildcard: "*",
+      permissions: ["*", "record.read"],
       leaves: ["record.read"],
       scopeDimensions: { "record.read": [] },
     });

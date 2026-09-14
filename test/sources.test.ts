@@ -4,7 +4,8 @@ import { createHierarchicalAccess, type AccessGrant } from "../src/index.js";
 /** Small role/profile catalog with a cross-subtree implication and correlated scopes. */
 const access = createHierarchicalAccess({
   catalogId: "source-preview", catalogVersion: 1, compilerVersion: 1,
-  permissions: ["record", "record.read", "record.write", "audit.read"],
+  wildcard: "*",
+  permissions: ["*", "record", "record.read", "record.write", "audit.read"],
   leaves: ["record.read", "record.write", "audit.read"],
   scopeDimensions: { "record.read": ["location", "resource"], "record.write": ["location", "resource"], "audit.read": ["location", "resource"] },
   implies: { "record.write": ["audit.read"] },

@@ -188,6 +188,11 @@ if (indexHeapBytesPerSnapshot > 16_384) {
     `Runtime index retained heap exceeded 16 KiB gate: ${indexHeapBytesPerSnapshot}`,
   );
 }
+if (temporalRuntimeHeapBytesPerSnapshot > 32_768) {
+  throw new Error(
+    `Temporal runtime retained heap exceeded 32 KiB gate: ${temporalRuntimeHeapBytesPerSnapshot}`,
+  );
+}
 if (retainedHeapAfterReleaseBytes > 4 * 1024 * 1024) {
   throw new Error(
     `Released snapshots left more than 4 MiB retained heap: ${retainedHeapAfterReleaseBytes}`,

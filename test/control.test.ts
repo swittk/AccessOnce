@@ -89,14 +89,17 @@ describe("access control plane", () => {
       grants: readonly string[];
       denied: boolean;
     };
-    let source = { revision: "7", source: { grants: ["read", "write"] } };
+    let source: { revision: string; source: Source } = {
+      revision: "7",
+      source: { grants: ["read", "write"] },
+    };
     let snapshot: CustomSnapshot = {
       kind: "app-snapshot",
       revision: "7",
       grants: ["read", "write"],
       denied: false,
     };
-    const control = createAccessPublicationControlPlane({
+    const control = createAccessPublicationControlPlane<Source, CustomSnapshot>({
       adapter: {
         async withSubjectLock(_subjectId, work) {
           return work();

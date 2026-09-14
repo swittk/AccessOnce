@@ -140,12 +140,14 @@ describe("access request control wire", () => {
       requestId: "r1",
       revision: "1",
       requesterId: "u1",
+      submittedAtEpochMs: 100,
       approval: { kind: "policy" as const, policyId: "restricted" },
       state: "pending" as const,
     }));
     const read = vi.fn(async () => ({
       requestId: "r1",
       requesterId: "u1",
+      submittedAtEpochMs: 100,
       subjectId: "u1",
       revision: "1",
       idempotencyKey: "k1",

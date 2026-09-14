@@ -8,6 +8,7 @@ import {
   defineAccessCatalog,
   materializeAccessRelationshipAt,
   sweepAccessRelationshipProjections,
+  type AccessRelationshipCheck,
 } from "../src/index.js";
 
 type Permission = "record.read";
@@ -38,7 +39,7 @@ describe("relationship ACL adapter", () => {
       grants: [{ permission: "record.read", scope: { location: { kind: "ids", ids: ["a"] } } }],
     });
     const evaluator = createAccessEvaluator(catalog);
-    const checkMany = vi.fn(async (requests) =>
+    const checkMany = vi.fn(async (requests: readonly AccessRelationshipCheck[]) =>
       requests.map((request) => request.principal.id === "user-a"),
     );
     const results = await authorizeAccessMany(

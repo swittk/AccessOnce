@@ -13,7 +13,7 @@ describe("relationship control client", () => {
       subjects: [{ principal: { type: "user", id: "alice" } }],
       cursor: "next",
     }));
-    const mutate = vi.fn(async () => undefined);
+    const mutate = vi.fn(async (_request: unknown) => undefined);
     const client = createAccessRelationshipControlClient({
       listSubjects,
       mutate,
@@ -87,6 +87,22 @@ describe("relationship control client", () => {
         },
       ],
     });
+  });
+
+  it("treats empty convenience mutation batches as local no-ops", async () => {
+    const mutate = vi.fn(async () => undefined);
+    const client = createAccessRelationshipControlClient({
+      async listSubjects() {
+        return { unrestricted: false, subjects: [] };
+      },
+      mutate,
+    });
+    const resource = { type: "document", id: "doc-1" };
+
+    await expect(client.add({ resource, relation: "reader", principals: [] })).resolves.toBeUndefined();
+    await expect(client.remove({ resource, relation: "reader", principals: [] })).resolves.toBeUndefined();
+    await expect(client.mutate([])).resolves.toBeUndefined();
+    expect(mutate).not.toHaveBeenCalled();
   });
 
   it("diffs a controlled ACL editor by semantic principal+validity source entries", () => {

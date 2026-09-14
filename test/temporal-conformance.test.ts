@@ -10,7 +10,8 @@ const access = createHierarchicalAccess({
   catalogId: "temporal-conformance",
   catalogVersion: 1,
   compilerVersion: 1,
-  permissions: ["record.read", "record.write"] as const,
+  wildcard: "*",
+  permissions: ["*", "record.read", "record.write"] as const,
   leaves: ["record.read", "record.write"] as const,
   scopeDimensions: {
     "record.read": ["location", "resource"],

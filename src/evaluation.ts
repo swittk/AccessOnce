@@ -123,16 +123,27 @@ export function createAccessEvaluationFactory<
     snapshot: EffectiveAccessSnapshot<Leaf, Dimension, Attribute>,
   ): TemporalRuntimeState<Leaf, Dimension> {
     const timeline = snapshot.temporal!;
-    const active = new Uint8Array(timeline.grants.length);
-    let activeCount = 0;
+    const grants = timeline.grants;
     const grantPositions = timeline.grantPositions;
-    let accepted =
-      timeline.grants.length > 0 &&
-      Array.isArray(grantPositions) &&
-      grantPositions.length === timeline.grants.length;
+    const initialGrantIndexes = timeline.initialGrantIndexes;
+    const transitions = timeline.transitions;
+    // Snapshots can cross a transport boundary. Validate the compact collection shell once before iteration.
+    if (
+      !Array.isArray(grants) ||
+      !Array.isArray(grantPositions) ||
+      !Array.isArray(initialGrantIndexes) ||
+      !Array.isArray(transitions) ||
+      grants.length === 0 ||
+      grantPositions.length !== grants.length
+    ) {
+      return { accepted: false, active: new Uint8Array(0), activeCount: 0, cursor: 0 };
+    }
+    const active = new Uint8Array(grants.length);
+    let activeCount = 0;
+    let accepted = true;
     if (accepted) {
       let previousPosition = -1;
-      const totalGrantCount = snapshot.grants.length + timeline.grants.length;
+      const totalGrantCount = snapshot.grants.length + grants.length;
       for (const position of grantPositions) {
         if (
           !Number.isSafeInteger(position) ||
@@ -145,7 +156,7 @@ export function createAccessEvaluationFactory<
         previousPosition = position;
       }
     }
-    for (const grantIndex of timeline.initialGrantIndexes) {
+    for (const grantIndex of initialGrantIndexes) {
       if (
         !Number.isSafeInteger(grantIndex) ||
         grantIndex < 0 ||
@@ -163,8 +174,12 @@ export function createAccessEvaluationFactory<
     if (accepted) {
       const simulated = active.slice();
       let previousTime: number | undefined;
-      for (const transition of timeline.transitions) {
+      for (const transition of transitions) {
         if (
+          typeof transition !== "object" ||
+          transition === null ||
+          !Array.isArray(transition.addGrantIndexes) ||
+          !Array.isArray(transition.removeGrantIndexes) ||
           !Number.isSafeInteger(transition.atEpochMs) ||
           (previousTime !== undefined && transition.atEpochMs <= previousTime)
         ) {

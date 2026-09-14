@@ -97,6 +97,7 @@ export function createAccessRelationshipControlClient(
       const principals = Array.isArray(args.principals)
         ? args.principals
         : [args.principals];
+      if (principals.length === 0) return Promise.resolve();
       const mutations: AccessRelationshipMutation[] = [];
       for (const principal of principals) {
         mutations.push({
@@ -113,6 +114,7 @@ export function createAccessRelationshipControlClient(
       const principals = Array.isArray(args.principals)
         ? args.principals
         : [args.principals];
+      if (principals.length === 0) return Promise.resolve();
       const mutations: AccessRelationshipMutation[] = [];
       for (const principal of principals) {
         mutations.push({
@@ -141,6 +143,7 @@ export function createAccessRelationshipControlClient(
       );
     },
     mutate(mutations, signal) {
+      if (mutations.length === 0) return Promise.resolve();
       return transport.mutate({ mutations }, signal);
     },
   };

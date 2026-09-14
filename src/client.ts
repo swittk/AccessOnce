@@ -235,7 +235,12 @@ export function createAccessSnapshotClient<Subject, Snapshot>(
     },
     refreshForSubject(editedSubject) {
       if (disposed) return Promise.reject(new Error("Access snapshot client is disposed"));
-      const editedKey = options.subjectKey?.(editedSubject) ?? editedSubject;
+      let editedKey: unknown;
+      try {
+        editedKey = options.subjectKey?.(editedSubject) ?? editedSubject;
+      } catch (error) {
+        return Promise.reject(error);
+      }
       if (subject === undefined || !Object.is(editedKey, subjectKey)) return Promise.resolve(undefined);
       return loadSelectedSubject();
     },

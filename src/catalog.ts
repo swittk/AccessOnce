@@ -34,7 +34,9 @@ export type AccessCatalog<
   Permission extends string,
   Leaf extends Permission,
   Dimension extends string,
-> = AccessCatalogDefinition<Permission, Leaf, Dimension> & {
+> = Omit<AccessCatalogDefinition<Permission, Leaf, Dimension>, "scopeDimensions"> & {
+  /** Return the immutable scope dimensions accepted by one concrete leaf. */
+  scopeDimensions(leaf: Leaf): readonly Dimension[];
   /** Fast membership check for any assignable permission node. */
   isPermission(value: string): value is Permission;
   /** Fast membership check for a concrete runtime leaf. */
