@@ -119,7 +119,11 @@ export function compileAccessSnapshot<
   }
 
   const grants = [...compiled.values()];
-  grants.sort((left, right) => compiledGrantKey(left).localeCompare(compiledGrantKey(right)));
+  grants.sort((left, right) => {
+    const leftKey = compiledGrantKey(left);
+    const rightKey = compiledGrantKey(right);
+    return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+  });
   Object.freeze(grants);
 
   /** Copy subject values into a plain deterministic object so snapshots are transport-safe. */
@@ -141,7 +145,7 @@ export function compileAccessSnapshot<
     catalogId: catalog.catalogId,
     catalogVersion: catalog.catalogVersion,
     compilerVersion: catalog.compilerVersion,
-    ...(args.sourceRevision ? { sourceRevision: args.sourceRevision } : {}),
+    ...(args.sourceRevision !== undefined ? { sourceRevision: args.sourceRevision } : {}),
     ...(subject ? { subject } : {}),
     grants,
   });
@@ -162,7 +166,7 @@ export function createDenyAllSnapshot<
     catalogId: catalog.catalogId,
     catalogVersion: catalog.catalogVersion,
     compilerVersion: catalog.compilerVersion,
-    ...(sourceRevision ? { sourceRevision } : {}),
+    ...(sourceRevision !== undefined ? { sourceRevision } : {}),
     grants: Object.freeze([]) as readonly CompiledAccessGrant<Leaf, Dimension, Attribute>[],
   });
 }

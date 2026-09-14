@@ -24,7 +24,6 @@ describe("relationship control client", () => {
       client.listSubjects({ resource, relation: "reader", limit: 50 })
     ).resolves.toEqual({
       unrestricted: false,
-      unrestricted: false,
       principals: [{ type: "user", id: "alice" }],
       cursor: "next",
     });
@@ -116,6 +115,37 @@ describe("relationship control client", () => {
         resource,
         relation: "reader",
         unrestricted: false,
+      },
+    ]);
+  });
+
+  it("distinguishes principal tuples even when either component contains a NUL", () => {
+    const resource = { type: "document", id: "doc-1" };
+    expect(
+      createAccessRelationshipChanges({
+        resource,
+        relation: "reader",
+        before: {
+          unrestricted: false,
+          principals: [{ type: "a", id: "b\u0000c" }],
+        },
+        after: {
+          unrestricted: false,
+          principals: [{ type: "a\u0000b", id: "c" }],
+        },
+      }),
+    ).toEqual([
+      {
+        operation: "remove",
+        principal: { type: "a", id: "b\u0000c" },
+        resource,
+        relation: "reader",
+      },
+      {
+        operation: "add",
+        principal: { type: "a\u0000b", id: "c" },
+        resource,
+        relation: "reader",
       },
     ]);
   });

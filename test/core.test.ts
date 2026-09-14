@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   compileAccessSnapshot,
   createAccess,
+  createDenyAllSnapshot,
   createAccessEvaluator,
   createHierarchicalAccess,
   defineAccessCatalog,
@@ -50,6 +51,11 @@ describe("AccessOnce core", () => {
     ]);
     expect(snapshot.grants.map((grant) => grant.permission)).toEqual(["record.read", "record.write"]);
     expect(snapshot.grants[0]?.constraints[0]).toEqual({ dimension: "location", kind: "ids", ids: ["a", "b"] });
+  });
+
+  it("preserves an explicitly empty source revision", () => {
+    expect(compileAccessSnapshot(catalog, { grants: [], sourceRevision: "" }).sourceRevision).toBe("");
+    expect(createDenyAllSnapshot(catalog, "").sourceRevision).toBe("");
   });
 
   it("returns deeply immutable canonical snapshots so identity caching cannot go stale", () => {
@@ -170,6 +176,25 @@ describe("AccessOnce core", () => {
       kind: "some",
       values: ["user-a"],
     });
+  });
+
+  it("keeps projections fail-closed when a subject-relative scope cannot resolve", () => {
+    const snapshot = compileAccessSnapshot<Permission, Leaf, Dimension, Attribute>(catalog, {
+      grants: [
+        {
+          permission: "billing.read",
+          scope: {
+            location: { kind: "ids", ids: ["site-a"] },
+            assignee: { kind: "subject", attribute: "assigneeId" },
+          },
+        },
+      ],
+    });
+    const access = createAccessEvaluator<Permission, Leaf, Dimension, Attribute>(catalog);
+
+    expect(access.can(snapshot, "billing.read", { location: "site-a", assignee: "user-a" })).toBe(false);
+    expect(access.allowedValues(snapshot, "billing.read", "location")).toEqual({ kind: "none" });
+    expect(access.queryPlan(snapshot, "billing.read")).toEqual({ kind: "none" });
   });
 
   it("projects values declaratively without leaking grant representation", () => {

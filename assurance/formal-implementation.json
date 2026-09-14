@@ -5,6 +5,9 @@
       "source": "src/publication.ts",
       "sourceDeclarations": [
         "AccessPublicationAdapter",
+        "PublishAccessSnapshotChangeArgs",
+        "publishAccessSnapshotChange",
+        "recoverPublishedAccessSnapshot",
         "PublishAccessChangeArgs",
         "publishAccessChange",
         "recoverAccessSnapshot"
@@ -20,7 +23,7 @@
       "modelInvariants": [
         "SnapshotNeverBroaderThanSource"
       ],
-      "sourceSha256": "a0044dcbde065fa8e72d96c1b814b0b68b971d6bc36c68e7da0a0e82c05b2355",
+      "sourceSha256": "13a34a743aa3f76bc9c2fd19b425221637815ff42c072639796b6ea194d39ac5",
       "modelSha256": "a54fce749f705264440726e7f0e7ec31db3b5202aa367f9b918c3d58d5292b47"
     }
   ]

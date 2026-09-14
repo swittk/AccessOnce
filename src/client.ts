@@ -189,10 +189,24 @@ export function createAccessSnapshotClient<Subject, Snapshot>(
     },
     async setSubject(nextSubject) {
       if (disposed) throw new Error("Access snapshot client is disposed");
-      const nextKey =
-        nextSubject === undefined
-          ? undefined
-          : (options.subjectKey?.(nextSubject) ?? nextSubject);
+      let nextKey: unknown;
+      try {
+        nextKey =
+          nextSubject === undefined
+            ? undefined
+            : (options.subjectKey?.(nextSubject) ?? nextSubject);
+      } catch (error) {
+        cancelCurrentWork();
+        subject = undefined;
+        subjectKey = undefined;
+        publish({ status: "error", error });
+        try {
+          unsubscribeCurrentSubject();
+        } catch {
+          // The stale callback is already detached locally; preserve the subject-key failure as the visible error.
+        }
+        return undefined;
+      }
       if (nextSubject !== undefined && Object.is(nextKey, subjectKey)) {
         subject = nextSubject;
         return loadSelectedSubject();

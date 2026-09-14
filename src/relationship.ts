@@ -233,11 +233,21 @@ export async function authorizeAccessMany<
       );
     }
   } else {
-    // A simple adapter still gets parallel I/O; remote adapters should implement checkMany to avoid N requests.
-    const pending: Promise<boolean>[] = [];
-    for (const check of relationshipChecks)
-      pending.push(relationshipAdapter.check(check));
-    relationshipResults = await Promise.all(pending);
+    // Keep the convenience fallback parallel without allowing one large page to fan out unbounded backend I/O.
+    const fallbackResults = new Array<boolean>(relationshipChecks.length);
+    let nextIndex = 0;
+    const worker = async () => {
+      while (nextIndex < relationshipChecks.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        fallbackResults[index] = await relationshipAdapter.check(relationshipChecks[index]!);
+      }
+    };
+    const workers: Promise<void>[] = [];
+    const workerCount = Math.min(32, relationshipChecks.length);
+    for (let index = 0; index < workerCount; index += 1) workers.push(worker());
+    await Promise.all(workers);
+    relationshipResults = fallbackResults;
   }
 
   for (let index = 0; index < relationshipResults.length; index += 1) {

@@ -1,5 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 /** Collect TypeScript source files recursively without looking at generated output. */
@@ -47,13 +48,13 @@ function inspectNode(sourceFile, node, failures) {
 }
 
 const failures = [];
-for (const file of await collectSourceFiles(new URL("../src", import.meta.url).pathname)) {
+for (const file of await collectSourceFiles(fileURLToPath(new URL("../src", import.meta.url)))) {
   const text = await readFile(file, "utf8");
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
   inspectNode(source, source, failures);
 }
 
-const hotRuntime = await readFile(new URL("../src/runtime.ts", import.meta.url), "utf8");
+const hotRuntime = await readFile(fileURLToPath(new URL("../src/runtime.ts", import.meta.url)), "utf8");
 for (const method of ["map", "filter", "sort", "includes", "some", "every"]) {
   if (hotRuntime.includes(`.${method}(`)) failures.push(`src/runtime.ts hot path uses .${method}()`);
 }

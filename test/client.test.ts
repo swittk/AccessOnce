@@ -100,6 +100,32 @@ describe("access snapshot client", () => {
     expect(client.getSnapshot()).toEqual({ subject: "bob", revision: 3 });
   });
 
+  it("clears prior authority when subject identity calculation fails", async () => {
+    const failure = new Error("invalid subject identity");
+    const unsubscribe = vi.fn();
+    const client = createAccessSnapshotClient({
+      subjectKey(subject: string) {
+        if (subject === "broken") throw failure;
+        return subject;
+      },
+      transport: {
+        async read(subject: string) {
+          return { subject };
+        },
+        subscribeInvalidations() {
+          return unsubscribe;
+        },
+      },
+    });
+
+    await client.setSubject("alice");
+    expect(client.getSnapshot()).toEqual({ subject: "alice" });
+    await expect(client.setSubject("broken")).resolves.toBeUndefined();
+    expect(client.getSnapshot()).toBeUndefined();
+    expect(client.getState()).toEqual({ status: "error", error: failure });
+    expect(unsubscribe).toHaveBeenCalledOnce();
+  });
+
   it("clears authority immediately on logout", async () => {
     const client = createAccessSnapshotClient({
       transport: {

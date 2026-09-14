@@ -64,6 +64,33 @@ describe("relationship ACL adapter", () => {
     expect(checkMany.mock.calls[0]?.[0]).toHaveLength(1);
   });
 
+  it("bounds fallback relationship checks while preserving result order", async () => {
+    const snapshot = compileAccessSnapshot(catalog, { grants: [{ permission: "record.read" }] });
+    const evaluator = createAccessEvaluator(catalog);
+    let active = 0;
+    let peak = 0;
+    const requests = Array.from({ length: 40 }, (_, index) => ({
+      permission: "record.read" as const,
+      principal: { type: "user", id: `user-${index}` },
+      relationship: {
+        resource: { type: "record", id: `r${index}` },
+        relation: "reader",
+      },
+    }));
+    const check = vi.fn(async (request) => {
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active -= 1;
+      return Number(request.principal.id.slice(5)) % 2 === 0;
+    });
+
+    const results = await authorizeAccessMany(evaluator, snapshot, requests, { check });
+    expect(peak).toBeLessThanOrEqual(32);
+    expect(peak).toBeGreaterThan(1);
+    expect(results).toEqual(requests.map((_, index) => index % 2 === 0));
+  });
+
   it("pushes collection authorization into one backend query operation without per-row fallback", async () => {
     const query = { where: ["site = a"] };
     const constrainQuery = vi.fn(async (request) => {

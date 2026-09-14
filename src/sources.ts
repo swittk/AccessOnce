@@ -56,7 +56,9 @@ export function compileAccessSources<Permission extends string, Leaf extends Per
     }
   }
 
-  const keys = [...grantsByKey.keys()].sort((left, right) => left.localeCompare(right));
+  const keys = [...grantsByKey.keys()].sort((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
   const grants: CompiledAccessGrant<Leaf, Dimension, Attribute>[] = [];
   const contributions: AccessGrantContribution<Leaf, Dimension, Attribute, SourceId>[] = [];
   for (const key of keys) {

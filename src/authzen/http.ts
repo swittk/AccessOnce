@@ -82,6 +82,15 @@ function parsePolicyDecisionPoint(value: string): URL {
   return url;
 }
 
+/** Validate an advertised operation endpoint before configured credentials can be sent to it. */
+function requireHttpsEndpoint(value: string, field: string): string {
+  const url = new URL(value);
+  if (url.protocol !== "https:") {
+    throw new AuthZenRequestError(`AuthZEN ${field} must use https`);
+  }
+  return url.href;
+}
+
 /** Append one default AuthZEN path to a PDP identifier while preserving any tenant path prefix. */
 function defaultEndpoint(policyDecisionPoint: URL, path: string): string {
   const base = policyDecisionPoint.href.endsWith("/")
@@ -223,18 +232,41 @@ export function createAuthZenHttpClientFromMetadata(
   parsePolicyDecisionPoint(metadata.policy_decision_point);
   return createClient(
     {
-      evaluation: metadata.access_evaluation_endpoint,
+      evaluation: requireHttpsEndpoint(
+        metadata.access_evaluation_endpoint,
+        "access_evaluation_endpoint",
+      ),
       ...(metadata.access_evaluations_endpoint
-        ? { evaluations: metadata.access_evaluations_endpoint }
+        ? {
+            evaluations: requireHttpsEndpoint(
+              metadata.access_evaluations_endpoint,
+              "access_evaluations_endpoint",
+            ),
+          }
         : {}),
       ...(metadata.search_subject_endpoint
-        ? { searchSubjects: metadata.search_subject_endpoint }
+        ? {
+            searchSubjects: requireHttpsEndpoint(
+              metadata.search_subject_endpoint,
+              "search_subject_endpoint",
+            ),
+          }
         : {}),
       ...(metadata.search_resource_endpoint
-        ? { searchResources: metadata.search_resource_endpoint }
+        ? {
+            searchResources: requireHttpsEndpoint(
+              metadata.search_resource_endpoint,
+              "search_resource_endpoint",
+            ),
+          }
         : {}),
       ...(metadata.search_action_endpoint
-        ? { searchActions: metadata.search_action_endpoint }
+        ? {
+            searchActions: requireHttpsEndpoint(
+              metadata.search_action_endpoint,
+              "search_action_endpoint",
+            ),
+          }
         : {}),
     },
     options,
@@ -253,7 +285,9 @@ export async function discoverAuthZenPdpMetadata(
     headers: await resolveHeaders(options, false),
   });
   const metadata = parseAuthZenPdpMetadata(await readJsonResponse(response));
-  if (metadata.policy_decision_point !== policyDecisionPoint) {
+  const requestedPdp = parsePolicyDecisionPoint(policyDecisionPoint).href;
+  const discoveredPdp = parsePolicyDecisionPoint(metadata.policy_decision_point).href;
+  if (discoveredPdp !== requestedPdp) {
     throw new AuthZenRequestError(
       "AuthZEN metadata policy_decision_point does not match the requested PDP identifier",
     );

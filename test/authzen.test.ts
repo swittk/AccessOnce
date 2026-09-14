@@ -185,4 +185,29 @@ describe("AuthZEN adapter", () => {
       }),
     ).rejects.toThrow("does not advertise Resource Search");
   });
+  it("rejects cleartext advertised endpoints before sending configured headers", () => {
+    expect(() =>
+      createAuthZenHttpClientFromMetadata({
+        policy_decision_point: "https://pdp.example.com",
+        access_evaluation_endpoint: "http://pdp.example.com/access/v1/evaluation",
+      }),
+    ).toThrow("access_evaluation_endpoint must use https");
+  });
+
+  it("accepts equivalent root PDP identifiers after URL normalization", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          policy_decision_point: "https://pdp.example.com/",
+          access_evaluation_endpoint: "https://pdp.example.com/access/v1/evaluation",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    await expect(
+      discoverAuthZenPdpMetadata("https://pdp.example.com", { fetch: fetchMock }),
+    ).resolves.toMatchObject({ policy_decision_point: "https://pdp.example.com/" });
+  });
+
 });

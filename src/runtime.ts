@@ -432,12 +432,15 @@ export function createAdaptedAccessEvaluator<
       for (const grant of permissionIndex.grants) {
         if (!grantMatchesProjection(grant, dimension, options)) continue;
         let targetConstraint: IndexedConstraint<Dimension> | undefined;
+        let usable = true;
         for (const constraint of grant.constraints) {
-          if (constraint.dimension === dimension) {
-            targetConstraint = constraint;
+          if (constraint.kind === "subject" && constraint.value === undefined) {
+            usable = false;
             break;
           }
+          if (constraint.dimension === dimension) targetConstraint = constraint;
         }
+        if (!usable) continue;
 
         // One matching grant without a target-dimension constraint makes that dimension fully open.
         if (!targetConstraint) return { kind: "all" };

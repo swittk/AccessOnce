@@ -148,7 +148,7 @@ export type AccessRelationshipEditorState = {
 
 /** Stable identity for exact explicit-principal set comparison. */
 function relationshipPrincipalKey(principal: AccessPrincipal): string {
-  return `${principal.type}\u0000${principal.id}`;
+  return JSON.stringify([principal.type, principal.id]);
 }
 
 /**
