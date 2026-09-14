@@ -222,7 +222,7 @@ describe("relationship control client", () => {
             },
           ],
         },
-        { maximumMutations: 8 }
+        { maximumMutations: 8, maximumValidityWindows: 2 }
       )
     ).toEqual({
       mutations: [
@@ -244,6 +244,23 @@ describe("relationship control client", () => {
         },
       ],
     });
+    expect(() =>
+      parseAccessRelationshipMutationRequest(
+        {
+          mutations: [{
+            operation: "add",
+            principal: { type: "user", id: "alice" },
+            resource: { type: "document", id: "doc-1" },
+            relation: "reader",
+            validity: [
+              { startsAtEpochMs: 100, endsAtEpochMs: 200 },
+              { startsAtEpochMs: 300 },
+            ],
+          }],
+        },
+        { maximumValidityWindows: 1 },
+      )
+    ).toThrow(/too many relationship validity windows/);
     expect(() =>
       parseAccessRelationshipMutationRequest({ mutations: [] })
     ).toThrow(/non-empty/);

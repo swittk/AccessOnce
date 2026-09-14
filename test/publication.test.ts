@@ -81,10 +81,11 @@ describe("fail-closed publication", () => {
       ).rejects.toThrow(/crash/);
 
       const state = fixture.state();
-      const evaluator = createAccessEvaluator(catalog);
-      if (!state.source.source.grants.includes("write")) {
-        expect(evaluator.can(state.snapshot, "write")).toBe(false);
-      }
+      expect(
+        state.snapshot.grants.every((grant) =>
+          state.source.source.grants.includes(grant.permission),
+        ),
+      ).toBe(true);
     });
   }
 

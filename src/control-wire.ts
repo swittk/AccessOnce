@@ -512,8 +512,13 @@ export function parseAccessControlMutationRequest<Mutation>(
 export function parseAccessGrantMutationRequest<Permission extends string, Leaf extends Permission, Dimension extends string, Attribute extends string>(
   access: Access<Permission, Leaf, Dimension, Attribute>,
   input: unknown,
+  options: AccessMutationDecodeOptions = {},
 ): AccessControlMutationRequest<AccessGrantMutation<Permission, Dimension, Attribute>> {
-  return parseAccessControlMutationRequest(input, mutation => parseAccessGrantMutation(access, mutation));
+  return parseAccessControlMutationRequest(
+    input,
+    mutation => parseAccessGrantMutation(access, mutation),
+    options,
+  );
 }
 
 /** Create a server-side grant mutation service over any versioned application authority source. */
@@ -533,6 +538,8 @@ export function createAccessGrantControlService<
   >;
   /** App mapping that locates direct grants inside its assignment/profile/role source. */
   source: AccessGrantSourceAdapter<Source, Permission, Dimension, Attribute>;
+  /** Optional transport-owned bounds for untrusted mutation batches. */
+  decode?: AccessMutationDecodeOptions;
 }): AccessGrantControlService<Permission, Dimension, Attribute> {
   return {
     async read(input) {
@@ -544,7 +551,7 @@ export function createAccessGrantControlService<
       };
     },
     async mutate(input) {
-      const request = parseAccessGrantMutationRequest(options.access, input);
+      const request = parseAccessGrantMutationRequest(options.access, input, options.decode);
       const current = await options.control.read(request.subjectId);
       if (current.revision !== request.expectedRevision) {
         throw new Error("Access source changed since this edit loaded");
@@ -576,12 +583,15 @@ export function createAccessGrantControlPlane<
 >(options: AccessControlPlaneOptions<Permission, Leaf, Dimension, Attribute, Source> & {
   /** Mapping that reads/replaces direct grants inside the application authority source. */
   source: AccessGrantSourceAdapter<Source, Permission, Dimension, Attribute>;
+  /** Optional transport-owned bounds for untrusted mutation batches. */
+  decode?: AccessMutationDecodeOptions;
 }) {
   const control = createAccessControlPlane(options);
   const grants = createAccessGrantControlService({
     access: options.access,
     control,
     source: options.source,
+    ...(options.decode === undefined ? {} : { decode: options.decode }),
   });
   return Object.freeze({ ...control, grants });
 }

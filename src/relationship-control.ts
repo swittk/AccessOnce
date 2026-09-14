@@ -211,6 +211,8 @@ export function createAccessRelationshipChanges(args: {
 export type AccessRelationshipDecodeOptions = {
   /** Maximum mutations accepted in one request; omitted leaves transport size limits in charge. */
   maximumMutations?: number;
+  /** Maximum validity windows accepted on one mutation; omitted leaves transport size limits in charge. */
+  maximumValidityWindows?: number;
   /** Maximum requested ACL page size; defaults to 256. */
   maximumSubjectsPageSize?: number;
 };
@@ -272,10 +274,14 @@ export function parseAccessRelationshipSubjectsRequest(
 
 /** Decode optional half-open validity from an untrusted relationship mutation. */
 function parseRelationshipValidity(
-  input: unknown
+  input: unknown,
+  maximumWindows?: number,
 ): AccessValidity | readonly AccessValidity[] | undefined {
   if (input === undefined) return undefined;
   const raw = Array.isArray(input) ? input : [input];
+  if (maximumWindows !== undefined && raw.length > maximumWindows) {
+    throw new Error("too many relationship validity windows in one mutation");
+  }
   const windows: AccessValidity[] = [];
   for (const value of raw) {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -303,7 +309,8 @@ function parseRelationshipValidity(
 
 /** Decode one untrusted relationship mutation. Application adapters still validate supported principal/resource/relation names. */
 export function parseAccessRelationshipMutation(
-  input: unknown
+  input: unknown,
+  options: AccessRelationshipDecodeOptions = {},
 ): AccessRelationshipMutation {
   if (!input || typeof input !== "object" || Array.isArray(input))
     throw new Error("relationship mutation must be an object");
@@ -322,7 +329,7 @@ export function parseAccessRelationshipMutation(
   }
   if (record.operation !== "add" && record.operation !== "remove")
     throw new Error("unknown relationship mutation operation");
-  const validity = parseRelationshipValidity(record.validity);
+  const validity = parseRelationshipValidity(record.validity, options.maximumValidityWindows);
   return {
     operation: record.operation,
     principal: relationshipWireIdentity(record.principal, "principal"),
@@ -350,6 +357,6 @@ export function parseAccessRelationshipMutationRequest(
   }
   const mutations: AccessRelationshipMutation[] = [];
   for (const mutation of record.mutations)
-    mutations.push(parseAccessRelationshipMutation(mutation));
+    mutations.push(parseAccessRelationshipMutation(mutation, options));
   return { mutations };
 }

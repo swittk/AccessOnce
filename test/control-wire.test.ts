@@ -10,6 +10,7 @@ import {
   type AccessGrant,
   type AccessGrantMutation,
   type AccessGrantControlState,
+  type AccessMutationDecodeOptions,
   type AccessPublicationAdapter,
   type EffectiveAccessSnapshot,
 } from "../src/index.js";
@@ -37,7 +38,7 @@ const access = createHierarchicalAccess({
 });
 
 /** Create one in-memory durable source/snapshot store with monotonic string revisions. */
-function createFixture(initialGrants: readonly Grant[]) {
+function createFixture(initialGrants: readonly Grant[], decode?: AccessMutationDecodeOptions) {
   let source = { revision: "1", source: { grants: initialGrants } };
   let snapshot: Snapshot = access.compile({
     grants: initialGrants,
@@ -76,6 +77,7 @@ function createFixture(initialGrants: readonly Grant[]) {
         return { ...nextSource, grants };
       },
     },
+    ...(decode === undefined ? {} : { decode }),
   });
   return {
     control,
@@ -127,6 +129,22 @@ describe("grant control wire", () => {
     expect(fixture.state().source.source.grants).toEqual(result.grants);
     expect(access.can(fixture.state().snapshot, "record.write", { location: "b" })).toBe(true);
     expect(access.can(fixture.state().snapshot, "billing.read")).toBe(false);
+  });
+
+  it("forwards transport mutation-count limits through the standard grant service", async () => {
+    const fixture = createFixture([], { maximumMutations: 1 });
+
+    await expect(
+      fixture.control.grants.mutate({
+        subjectId: "alice",
+        expectedRevision: "1",
+        mutations: [
+          { operation: "add", grants: [grant("record.read", "a")] },
+          { operation: "add", grants: [grant("record.write", "b")] },
+        ],
+      }),
+    ).rejects.toThrow(/Too many access mutations/);
+    expect(fixture.state().source.revision).toBe("1");
   });
 
   it("removes only the exact scoped grant while preserving the same permission at another scope", async () => {
