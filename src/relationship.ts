@@ -1,4 +1,4 @@
-import type { AccessContext } from "./types.js";
+import type { AccessContext, AccessValidity } from "./types.js";
 import type { AccessEvaluator } from "./runtime.js";
 
 /** Principal passed to a high-cardinality relationship/ACL store. */
@@ -17,6 +17,32 @@ export type AccessRelationshipResource = {
   id: string;
 };
 
+/** One explicit principal relationship source entry, optionally active only during bounded windows. */
+export type AccessRelationshipSubject = {
+  /** Principal that satisfies the relation while this source entry is active. */
+  principal: AccessPrincipal;
+  /** Optional half-open validity windows; omitted means timeless. */
+  validity?: AccessValidity | readonly AccessValidity[];
+};
+
+/** Canonical source for one resource/relation projection. */
+export type AccessRelationshipSource = {
+  /** True means this relation imposes no extra principal restriction. */
+  unrestricted: boolean;
+  /** Explicit principal source entries, including future and expired temporal entries. */
+  subjects: readonly AccessRelationshipSubject[];
+};
+
+/** Effective relationship state at one instant plus the next instant at which it can change. */
+export type MaterializedAccessRelationship = {
+  /** Effective open/restricted state copied from the source. */
+  unrestricted: boolean;
+  /** Unique principals whose source entries are active at the requested instant. */
+  principals: readonly AccessPrincipal[];
+  /** Earliest future source boundary; omitted means this materialization is time-stable indefinitely. */
+  nextTransitionAtEpochMs?: number;
+};
+
 /** Extra object-level relationship required after the cheap compiled permission check passes. */
 export type AccessRelationshipRequirement = {
   /** Particular object carrying the narrow ACL. */
@@ -33,6 +59,8 @@ export type AccessRelationshipCheck = {
   resource: AccessRelationshipResource;
   /** Relationship the principal must satisfy. */
   relation: string;
+  /** Optional evaluation instant for stores that enforce temporal relationships directly. */
+  atEpochMs?: number;
 };
 
 /** Adapter for explicit people/groups/roles/object ACLs that are too high-cardinality for actor snapshots. */
@@ -55,6 +83,8 @@ export type AccessRelationshipQueryRequest<Query> = {
   resourceType: string;
   /** Relationship required by restricted resources, for example reader or editor. */
   relation: string;
+  /** Optional evaluation instant for databases that can push temporal validity into the query itself. */
+  atEpochMs?: number;
 };
 
 /**
@@ -71,7 +101,7 @@ export type AccessRelationshipQueryAdapter<Query> = {
   ): Query | Promise<Query>;
 };
 
-/** Request for principals explicitly represented by one resource relationship. */
+/** Request for subjects explicitly represented by one resource relationship. */
 export type AccessRelationshipSubjectsRequest = {
   /** Resource whose ACL/relationship membership is being edited or inspected. */
   resource: AccessRelationshipResource;
@@ -83,27 +113,27 @@ export type AccessRelationshipSubjectsRequest = {
   limit?: number;
 };
 
-/** One bounded page of explicit principals for a resource relationship. */
+/** One bounded page of explicit relationship source entries. */
 export type AccessRelationshipSubjectsPage = {
   /** True when this relation imposes no extra principal restriction on the resource. */
   unrestricted: boolean;
-  /** Explicit principals represented by this page; inherited/effective subjects need not be expanded. */
-  principals: readonly AccessPrincipal[];
+  /** Explicit source entries represented by this page; inherited/effective subjects need not be expanded. */
+  subjects: readonly AccessRelationshipSubject[];
   /** Opaque cursor when another page exists. */
   cursor?: string;
 };
 
 /** Optional object-centered read side used by ACL editors without scanning a resource namespace. */
 export type AccessRelationshipSubjectsAdapter = {
-  /** List a bounded page of explicit principals attached to one resource relation. */
+  /** List a bounded page of explicit source entries attached to one resource relation. */
   listSubjects(
     request: AccessRelationshipSubjectsRequest
   ): Promise<AccessRelationshipSubjectsPage>;
 };
 
-/** Add or remove one explicit principal from an application-owned resource relation. */
+/** Add or remove one explicit principal source entry from an application-owned resource relation. */
 export type AccessRelationshipPrincipalMutation = {
-  /** Add creates the relationship; remove revokes that exact relationship. */
+  /** Add creates the source entry; remove revokes matching source entries. */
   operation: "add" | "remove";
   /** Principal whose explicit/group/role relationship is changing. */
   principal: AccessPrincipal;
@@ -111,6 +141,8 @@ export type AccessRelationshipPrincipalMutation = {
   resource: AccessRelationshipResource;
   /** Application-defined relation such as reader, editor, group-member, or approver. */
   relation: string;
+  /** Optional exact temporal contribution. A remove without validity removes every source entry for the principal. */
+  validity?: AccessValidity | readonly AccessValidity[];
 };
 
 /** Toggle whether one resource relation is satisfied without any explicit principal membership. */
@@ -136,6 +168,39 @@ export type AccessRelationshipMutationAdapter = {
   mutate(mutations: readonly AccessRelationshipMutation[]): Promise<void>;
 };
 
+/** One resource/relation whose physical ACL projection is due for reconciliation. */
+export type AccessRelationshipProjectionTarget = {
+  /** Resource whose physical authorization projection may be stale. */
+  resource: AccessRelationshipResource;
+  /** Relation being projected for this resource. */
+  relation: string;
+};
+
+/**
+ * Optional projection capability for storage engines whose native ACL cannot encode time directly.
+ *
+ * `reconcileAt` owns the backend's transaction/lock discipline. It must acquire the backend's per-resource
+ * serialization primitive, re-read current source inside that protection, and reconcile current truth rather
+ * than replaying a stale transition event.
+ */
+export type AccessRelationshipProjectionAdapter = {
+  /** Return at most `limit` unique resource/relation projections due at or before the supplied instant. */
+  listDue(atEpochMs: number, limit: number): Promise<readonly AccessRelationshipProjectionTarget[]>;
+  /** Reconcile one target against current source at the supplied instant. */
+  reconcileAt(
+    target: AccessRelationshipProjectionTarget,
+    atEpochMs: number
+  ): Promise<void>;
+};
+
+/** Bounds controlling one host-invoked temporal relationship projection sweep. */
+export type AccessRelationshipProjectionSweepOptions = {
+  /** Maximum due projections considered in this invocation; defaults to 256. */
+  limit?: number;
+  /** Maximum reconciliations in flight at once; defaults to 16. */
+  concurrency?: number;
+};
+
 /** Convenience shape for a relationship backend that supports both authorization checks and writes. */
 export type AccessRelationshipStore = AccessRelationshipAdapter &
   AccessRelationshipMutationAdapter;
@@ -147,6 +212,167 @@ export type AccessQueryableRelationshipStore<Query> = AccessRelationshipStore &
 /** Relationship backend suitable for a direct ACL editor as well as authorization checks and writes. */
 export type AccessEditableRelationshipStore = AccessRelationshipStore &
   AccessRelationshipSubjectsAdapter;
+
+/** Return one stable principal identity key without delimiter collision. */
+function relationshipPrincipalKey(principal: AccessPrincipal): string {
+  return JSON.stringify([principal.type, principal.id]);
+}
+
+/** Validate one temporal boundary accepted by relationship materialization. */
+function relationshipBoundary(value: number | undefined, label: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value)) throw new RangeError(`${label} must be a safe integer`);
+  return value;
+}
+
+/** Canonicalize one validity value for stable relationship-source identity. */
+function relationshipValidityKey(
+  validity: AccessValidity | readonly AccessValidity[] | undefined
+): readonly (readonly [number | null, number | null])[] | null {
+  if (validity === undefined) return null;
+  const input = Array.isArray(validity) ? validity : [validity];
+  const windows: Array<[number | null, number | null]> = [];
+  for (const window of input) {
+    const start = relationshipBoundary(window.startsAtEpochMs, "startsAtEpochMs") ?? null;
+    const end = relationshipBoundary(window.endsAtEpochMs, "endsAtEpochMs") ?? null;
+    if (start !== null && end !== null && start > end) {
+      throw new RangeError("startsAtEpochMs must not be after endsAtEpochMs");
+    }
+    if (start !== null && start === end) continue;
+    if (start === null && end === null) return null;
+    windows.push([start, end]);
+  }
+  windows.sort((left, right) => {
+    const leftStart = left[0] ?? Number.NEGATIVE_INFINITY;
+    const rightStart = right[0] ?? Number.NEGATIVE_INFINITY;
+    if (leftStart !== rightStart) return leftStart - rightStart;
+    return (left[1] ?? Number.POSITIVE_INFINITY) - (right[1] ?? Number.POSITIVE_INFINITY);
+  });
+  const merged: Array<[number | null, number | null]> = [];
+  for (const window of windows) {
+    const previous = merged[merged.length - 1];
+    if (!previous) {
+      merged.push(window);
+      continue;
+    }
+    const previousEnd = previous[1];
+    const nextStart = window[0];
+    if (previousEnd !== null && nextStart !== null && nextStart > previousEnd) {
+      merged.push(window);
+      continue;
+    }
+    previous[1] = previousEnd === null || window[1] === null
+      ? null
+      : Math.max(previousEnd, window[1]);
+  }
+  return merged;
+}
+
+/** Stable semantic identity for one explicit relationship source entry. */
+export function accessRelationshipSubjectKey(subject: AccessRelationshipSubject): string {
+  return JSON.stringify([
+    subject.principal.type,
+    subject.principal.id,
+    relationshipValidityKey(subject.validity),
+  ]);
+}
+
+/** Cold result of evaluating one relationship source entry at one instant. */
+type RelationshipSubjectEvaluation = {
+  /** Whether this source entry contributes authority at the requested instant. */
+  active: boolean;
+  /** Earliest future boundary carried by this entry, when one exists. */
+  nextTransitionAtEpochMs?: number;
+};
+
+/** Evaluate one source entry and return whether it is active plus its earliest future boundary. */
+function relationshipSubjectAt(
+  subject: AccessRelationshipSubject,
+  atEpochMs: number
+): RelationshipSubjectEvaluation {
+  const windows = relationshipValidityKey(subject.validity);
+  if (windows === null) return { active: true };
+  for (const [start, end] of windows) {
+    if (start !== null && atEpochMs < start) {
+      return { active: false, nextTransitionAtEpochMs: start };
+    }
+    if (end === null || atEpochMs < end) {
+      return {
+        active: true,
+        ...(end === null ? {} : { nextTransitionAtEpochMs: end }),
+      };
+    }
+  }
+  return { active: false };
+}
+
+/**
+ * Materialize one resource/relation source at an explicit instant.
+ *
+ * This is a cold reconciliation primitive, not a query hot path. It deduplicates principals whose overlapping
+ * source entries are simultaneously active and reports the next known boundary so projected backends can index
+ * only genuinely due work.
+ */
+export function materializeAccessRelationshipAt(
+  source: AccessRelationshipSource,
+  atEpochMs: number
+): MaterializedAccessRelationship {
+  if (!Number.isSafeInteger(atEpochMs)) throw new RangeError("atEpochMs must be a safe integer");
+  const principals = new Map<string, AccessPrincipal>();
+  let nextTransitionAtEpochMs: number | undefined;
+  for (const subject of source.subjects) {
+    const evaluated = relationshipSubjectAt(subject, atEpochMs);
+    if (evaluated.active) {
+      const key = relationshipPrincipalKey(subject.principal);
+      if (!principals.has(key)) principals.set(key, subject.principal);
+    }
+    const next = evaluated.nextTransitionAtEpochMs;
+    if (next !== undefined &&
+        (nextTransitionAtEpochMs === undefined || next < nextTransitionAtEpochMs)) {
+      nextTransitionAtEpochMs = next;
+    }
+  }
+  return Object.freeze({
+    unrestricted: source.unrestricted,
+    principals: Object.freeze([...principals.values()]),
+    ...(nextTransitionAtEpochMs === undefined ? {} : { nextTransitionAtEpochMs }),
+  });
+}
+
+/**
+ * Reconcile one bounded page of due physical ACL projections.
+ *
+ * Hosts own cadence (`setInterval`, cron, request maintenance, dedicated worker, etc.). AccessOnce only performs
+ * one bounded sweep so framework/process lifecycle never leaks into the core package.
+ */
+export async function sweepAccessRelationshipProjections(
+  adapter: AccessRelationshipProjectionAdapter,
+  atEpochMs: number,
+  options: AccessRelationshipProjectionSweepOptions = {}
+): Promise<number> {
+  if (!Number.isSafeInteger(atEpochMs)) throw new RangeError("atEpochMs must be a safe integer");
+  const limit = options.limit ?? 256;
+  const concurrency = options.concurrency ?? 16;
+  if (!Number.isInteger(limit) || limit < 1) throw new RangeError("limit must be a positive integer");
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new RangeError("concurrency must be a positive integer");
+  }
+  const due = await adapter.listDue(atEpochMs, limit);
+  if (due.length > limit) throw new Error("Relationship projection adapter returned more rows than requested");
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < due.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      await adapter.reconcileAt(due[index]!, atEpochMs);
+    }
+  };
+  const workers: Promise<void>[] = [];
+  const workerCount = Math.min(concurrency, due.length);
+  for (let index = 0; index < workerCount; index += 1) workers.push(worker());
+  await Promise.all(workers);
+  return due.length;
+}
 
 /** Complete authorization request with an optional narrow object relationship. */
 export type AccessAuthorizationRequest<
@@ -161,6 +387,8 @@ export type AccessAuthorizationRequest<
   principal?: AccessPrincipal;
   /** Optional object-level ACL/relationship requirement. */
   relationship?: AccessRelationshipRequirement;
+  /** Optional evaluation instant forwarded to relationship stores that enforce time natively. */
+  atEpochMs?: number;
 };
 
 /** Keep the normal path synchronous/cheap and consult an ACL adapter only for an object that asks for it. */
@@ -184,6 +412,7 @@ export async function authorizeAccess<
     principal: request.principal,
     resource: request.relationship.resource,
     relation: request.relationship.relation,
+    ...(request.atEpochMs === undefined ? {} : { atEpochMs: request.atEpochMs }),
   });
 }
 
@@ -216,6 +445,7 @@ export async function authorizeAccessMany<
       principal: request.principal,
       resource: request.relationship.resource,
       relation: request.relationship.relation,
+      ...(request.atEpochMs === undefined ? {} : { atEpochMs: request.atEpochMs }),
     });
     relationshipResultIndexes.push(index);
   }
@@ -255,6 +485,7 @@ export async function authorizeAccessMany<
   }
   return results;
 }
+
 /**
  * Apply one backend-native relationship visibility filter to an existing query.
  *

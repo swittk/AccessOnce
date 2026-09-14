@@ -10,7 +10,7 @@ describe("relationship control client", () => {
   it("lists one bounded object ACL and batches add/remove principals", async () => {
     const listSubjects = vi.fn(async () => ({
       unrestricted: false,
-      principals: [{ type: "user", id: "alice" }],
+      subjects: [{ principal: { type: "user", id: "alice" } }],
       cursor: "next",
     }));
     const mutate = vi.fn(async () => undefined);
@@ -24,7 +24,7 @@ describe("relationship control client", () => {
       client.listSubjects({ resource, relation: "reader", limit: 50 })
     ).resolves.toEqual({
       unrestricted: false,
-      principals: [{ type: "user", id: "alice" }],
+      subjects: [{ principal: { type: "user", id: "alice" } }],
       cursor: "next",
     });
 
@@ -35,6 +35,7 @@ describe("relationship control client", () => {
         { type: "user", id: "bob" },
         { type: "role", id: "reviewers" },
       ],
+      validity: { startsAtEpochMs: 10, endsAtEpochMs: 20 },
     });
     expect(mutate.mock.calls[0]?.[0]).toEqual({
       mutations: [
@@ -43,12 +44,14 @@ describe("relationship control client", () => {
           principal: { type: "user", id: "bob" },
           resource,
           relation: "reader",
+          validity: { startsAtEpochMs: 10, endsAtEpochMs: 20 },
         },
         {
           operation: "add",
           principal: { type: "role", id: "reviewers" },
           resource,
           relation: "reader",
+          validity: { startsAtEpochMs: 10, endsAtEpochMs: 20 },
         },
       ],
     });
@@ -85,7 +88,8 @@ describe("relationship control client", () => {
       ],
     });
   });
-  it("diffs a controlled ACL editor into minimal principal changes plus one visibility switch", () => {
+
+  it("diffs a controlled ACL editor by semantic principal+validity source entries", () => {
     const resource = { type: "document", id: "doc-1" };
     expect(
       createAccessRelationshipChanges({
@@ -93,13 +97,19 @@ describe("relationship control client", () => {
         relation: "reader",
         before: {
           unrestricted: true,
-          principals: [{ type: "user", id: "alice" }],
+          subjects: [{ principal: { type: "user", id: "alice" } }],
         },
         after: {
           unrestricted: false,
-          principals: [
-            { type: "user", id: "alice" },
-            { type: "role", id: "reviewers" },
+          subjects: [
+            { principal: { type: "user", id: "alice" } },
+            {
+              principal: { type: "role", id: "reviewers" },
+              validity: [
+                { startsAtEpochMs: 10, endsAtEpochMs: 20 },
+                { startsAtEpochMs: 15, endsAtEpochMs: 30 },
+              ],
+            },
           ],
         },
       })
@@ -109,6 +119,10 @@ describe("relationship control client", () => {
         principal: { type: "role", id: "reviewers" },
         resource,
         relation: "reader",
+        validity: [
+          { startsAtEpochMs: 10, endsAtEpochMs: 20 },
+          { startsAtEpochMs: 15, endsAtEpochMs: 30 },
+        ],
       },
       {
         operation: "set-unrestricted",
@@ -117,6 +131,30 @@ describe("relationship control client", () => {
         unrestricted: false,
       },
     ]);
+
+    expect(
+      createAccessRelationshipChanges({
+        resource,
+        relation: "reader",
+        before: {
+          unrestricted: false,
+          subjects: [{
+            principal: { type: "user", id: "alice" },
+            validity: [
+              { startsAtEpochMs: 20, endsAtEpochMs: 30 },
+              { startsAtEpochMs: 10, endsAtEpochMs: 20 },
+            ],
+          }],
+        },
+        after: {
+          unrestricted: false,
+          subjects: [{
+            principal: { type: "user", id: "alice" },
+            validity: { startsAtEpochMs: 10, endsAtEpochMs: 30 },
+          }],
+        },
+      })
+    ).toEqual([]);
   });
 
   it("distinguishes principal tuples even when either component contains a NUL", () => {
@@ -127,11 +165,11 @@ describe("relationship control client", () => {
         relation: "reader",
         before: {
           unrestricted: false,
-          principals: [{ type: "a", id: "b\u0000c" }],
+          subjects: [{ principal: { type: "a", id: "b\u0000c" } }],
         },
         after: {
           unrestricted: false,
-          principals: [{ type: "a\u0000b", id: "c" }],
+          subjects: [{ principal: { type: "a\u0000b", id: "c" } }],
         },
       }),
     ).toEqual([
@@ -177,6 +215,10 @@ describe("relationship control client", () => {
               principal: { type: "user", id: "alice" },
               resource: { type: "document", id: "doc-1" },
               relation: "reader",
+              validity: [
+                { startsAtEpochMs: 100, endsAtEpochMs: 200 },
+                { startsAtEpochMs: 300 },
+              ],
             },
           ],
         },
@@ -195,11 +237,26 @@ describe("relationship control client", () => {
           principal: { type: "user", id: "alice" },
           resource: { type: "document", id: "doc-1" },
           relation: "reader",
+          validity: [
+            { startsAtEpochMs: 100, endsAtEpochMs: 200 },
+            { startsAtEpochMs: 300 },
+          ],
         },
       ],
     });
     expect(() =>
       parseAccessRelationshipMutationRequest({ mutations: [] })
     ).toThrow(/non-empty/);
+    expect(() =>
+      parseAccessRelationshipMutationRequest({
+        mutations: [{
+          operation: "add",
+          principal: { type: "user", id: "alice" },
+          resource: { type: "document", id: "doc-1" },
+          relation: "reader",
+          validity: { startsAtEpochMs: 20, endsAtEpochMs: 10 },
+        }],
+      })
+    ).toThrow(/start must not be after end/);
   });
 });

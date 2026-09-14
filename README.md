@@ -330,13 +330,18 @@ Relationship support is deliberately capability-based rather than a required res
 
 - `check` / `checkMany` authorize objects already in hand;
 - `constrainQuery` is an optional **database-pushdown** capability for large collections;
-- `listSubjects` is an optional object-centered read for ACL editors;
+- relationship source entries may carry the same half-open temporal validity used by actor grants;
+- `listSubjects` is an optional object-centered source read for ACL editors;
 - `mutate` applies exact `add`, `remove`, and `set-unrestricted` changes;
 - `createAccessRelationshipControlClient()` and `createAccessRelationshipChanges()` provide transport-neutral controlled-editor ergonomics under `@accessonce/core/control`.
 
-`constrainQuery` intentionally has **no fallback** to “list every accessible resource id” or “fetch rows and filter in JavaScript.” At million-row scale that fallback can turn an authorization abstraction into a scan. Backends should implement the strategy they are good at: SQL `EXISTS`/joins, native database/object ACL predicates, a materialized authorization index, or another index/search-native filter. A relationship graph service can still use `checkMany` for bounded pages; wide object enumeration is a backend-specific choice, not a hidden AccessOnce behavior.
+`constrainQuery` intentionally has **no fallback** to “list every accessible resource id” or “fetch rows and filter in JavaScript.” At million-row scale that fallback can turn an authorization abstraction into a scan. A database that can express time directly should consume `atEpochMs` in its native predicate, for example an indexed SQL `EXISTS`/join with temporal bounds. It needs no background materialization loop.
 
-An ACL editor has an explicit `unrestricted` flag in addition to its principal list. This distinguishes an ordinary/open resource from a deliberately restricted resource whose current reader set is empty. The generic model therefore stays composable without inventing document fields, profile semantics, or a universal relationship database.
+Some native ACL representations cannot encode time. Those backends may implement `AccessRelationshipProjectionAdapter`: `listDue()` returns only indexed projections whose known next boundary has arrived, while `reconcileAt()` re-reads current source under the backend's own per-resource lock/transaction and rewrites the physical ACL projection. `sweepAccessRelationshipProjections()` performs one bounded, concurrency-limited pass. AccessOnce never starts a timer; the host chooses `setInterval`, cron, request maintenance, or another lifecycle strategy.
+
+The query-plan and relationship-query helpers are low-level integration primitives, not a workflow applications should repeatedly spell out at call sites. A database/framework integration should bind them once at its query boundary so ordinary application queries remain ordinary queries.
+
+An ACL editor has an explicit `unrestricted` flag plus explicit source entries. This distinguishes an ordinary/open resource from a deliberately restricted resource whose currently active reader set is empty, while preserving future timed relationships without inflating actor snapshots.
 
 ## Bring your own storage and query layer
 

@@ -1,14 +1,18 @@
+import { accessRelationshipSubjectKey } from "./relationship.js";
 import type {
   AccessPrincipal,
   AccessRelationshipMutation,
+  AccessRelationshipSubject,
   AccessRelationshipSubjectsPage,
   AccessRelationshipSubjectsRequest,
 } from "./relationship.js";
+import type { AccessValidity } from "./types.js";
 
 export type {
   AccessPrincipal,
   AccessRelationshipMutation,
   AccessRelationshipResource,
+  AccessRelationshipSubject,
   AccessRelationshipSubjectsPage,
   AccessRelationshipSubjectsRequest,
 } from "./relationship.js";
@@ -46,6 +50,8 @@ export type AccessRelationshipControlChangeArgs = {
   relation: string;
   /** One principal or several principals changed in the same transport call. */
   principals: AccessRelationshipPrincipalInput;
+  /** Optional half-open validity applied to each changed principal. Omitted means timeless/all entries on remove. */
+  validity?: AccessValidity | readonly AccessValidity[];
   /** Optional transport cancellation signal. */
   signal?: AbortSignal;
 };
@@ -98,6 +104,7 @@ export function createAccessRelationshipControlClient(
           principal,
           resource: args.resource,
           relation: args.relation,
+          ...(args.validity === undefined ? {} : { validity: args.validity }),
         });
       }
       return transport.mutate({ mutations }, args.signal);
@@ -113,6 +120,7 @@ export function createAccessRelationshipControlClient(
           principal,
           resource: args.resource,
           relation: args.relation,
+          ...(args.validity === undefined ? {} : { validity: args.validity }),
         });
       }
       return transport.mutate({ mutations }, args.signal);
@@ -138,18 +146,13 @@ export function createAccessRelationshipControlClient(
   };
 }
 
-/** Complete object-centered ACL editor state after all explicit-principal pages have been loaded. */
+/** Complete object-centered ACL editor state after all explicit-source pages have been loaded. */
 export type AccessRelationshipEditorState = {
   /** True when this relation imposes no extra principal restriction. */
   unrestricted: boolean;
-  /** Complete explicit principal set represented by the editor. */
-  principals: readonly AccessPrincipal[];
+  /** Complete explicit relationship source entries represented by the editor. */
+  subjects: readonly AccessRelationshipSubject[];
 };
-
-/** Stable identity for exact explicit-principal set comparison. */
-function relationshipPrincipalKey(principal: AccessPrincipal): string {
-  return JSON.stringify([principal.type, principal.id]);
-}
 
 /**
  * Convert one controlled ACL editor before/after state into minimal exact mutations.
@@ -166,29 +169,31 @@ export function createAccessRelationshipChanges(args: {
   /** Complete controlled state the user intends to save. */
   after: AccessRelationshipEditorState;
 }): AccessRelationshipMutation[] {
-  const before = new Map<string, AccessPrincipal>();
-  const after = new Map<string, AccessPrincipal>();
-  for (const principal of args.before.principals)
-    before.set(relationshipPrincipalKey(principal), principal);
-  for (const principal of args.after.principals)
-    after.set(relationshipPrincipalKey(principal), principal);
+  const before = new Map<string, AccessRelationshipSubject>();
+  const after = new Map<string, AccessRelationshipSubject>();
+  for (const subject of args.before.subjects)
+    before.set(accessRelationshipSubjectKey(subject), subject);
+  for (const subject of args.after.subjects)
+    after.set(accessRelationshipSubjectKey(subject), subject);
   const mutations: AccessRelationshipMutation[] = [];
-  for (const [key, principal] of before) {
+  for (const [key, subject] of before) {
     if (!after.has(key))
       mutations.push({
         operation: "remove",
-        principal,
+        principal: subject.principal,
         resource: args.resource,
         relation: args.relation,
+        ...(subject.validity === undefined ? {} : { validity: subject.validity }),
       });
   }
-  for (const [key, principal] of after) {
+  for (const [key, subject] of after) {
     if (!before.has(key))
       mutations.push({
         operation: "add",
-        principal,
+        principal: subject.principal,
         resource: args.resource,
         relation: args.relation,
+        ...(subject.validity === undefined ? {} : { validity: subject.validity }),
       });
   }
   if (args.before.unrestricted !== args.after.unrestricted) {
@@ -265,6 +270,37 @@ export function parseAccessRelationshipSubjectsRequest(
   };
 }
 
+/** Decode optional half-open validity from an untrusted relationship mutation. */
+function parseRelationshipValidity(
+  input: unknown
+): AccessValidity | readonly AccessValidity[] | undefined {
+  if (input === undefined) return undefined;
+  const raw = Array.isArray(input) ? input : [input];
+  const windows: AccessValidity[] = [];
+  for (const value of raw) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("relationship validity must be an object or array of objects");
+    }
+    const record = value as Record<string, unknown>;
+    const start = record.startsAtEpochMs;
+    const end = record.endsAtEpochMs;
+    if (start !== undefined && !Number.isSafeInteger(start)) {
+      throw new Error("relationship validity startsAtEpochMs must be a safe integer");
+    }
+    if (end !== undefined && !Number.isSafeInteger(end)) {
+      throw new Error("relationship validity endsAtEpochMs must be a safe integer");
+    }
+    if (start !== undefined && end !== undefined && Number(start) > Number(end)) {
+      throw new Error("relationship validity start must not be after end");
+    }
+    windows.push({
+      ...(start === undefined ? {} : { startsAtEpochMs: Number(start) }),
+      ...(end === undefined ? {} : { endsAtEpochMs: Number(end) }),
+    });
+  }
+  return Array.isArray(input) ? windows : windows[0]!;
+}
+
 /** Decode one untrusted relationship mutation. Application adapters still validate supported principal/resource/relation names. */
 export function parseAccessRelationshipMutation(
   input: unknown
@@ -286,11 +322,13 @@ export function parseAccessRelationshipMutation(
   }
   if (record.operation !== "add" && record.operation !== "remove")
     throw new Error("unknown relationship mutation operation");
+  const validity = parseRelationshipValidity(record.validity);
   return {
     operation: record.operation,
     principal: relationshipWireIdentity(record.principal, "principal"),
     resource,
     relation,
+    ...(validity === undefined ? {} : { validity }),
   };
 }
 

@@ -75,6 +75,22 @@ function checkCore(module, label) {
   if (model.evaluateAt(temporalSnapshot, 20).can("read", { location: "timed" })) {
     throw new Error(`${label} build failed temporal evaluation at the exclusive boundary`);
   }
+  const relationship = module.materializeAccessRelationshipAt(
+    {
+      unrestricted: false,
+      subjects: [{
+        principal: { type: "user", id: "alice" },
+        validity: { startsAtEpochMs: 10, endsAtEpochMs: 20 },
+      }],
+    },
+    15,
+  );
+  if (relationship.principals[0]?.id !== "alice" || relationship.nextTransitionAtEpochMs !== 20) {
+    throw new Error(`${label} build failed temporal relationship materialization`);
+  }
+  if (typeof module.sweepAccessRelationshipProjections !== "function") {
+    throw new Error(`${label} build is missing relationship projection sweeping`);
+  }
 }
 
 checkCore(esm, "esm");
