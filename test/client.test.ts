@@ -149,6 +149,31 @@ describe("access snapshot client", () => {
     expect(client.getSnapshot()).toEqual({ subject: "alice" });
   });
 
+  it("retries push subscription setup for the same subject after a transient failure", async () => {
+    const failure = new Error("subscription unavailable");
+    let subscriptionAttempts = 0;
+    const read = vi.fn(async (subject: string) => ({ subject }));
+    const client = createAccessSnapshotClient({
+      transport: {
+        read,
+        subscribeInvalidations() {
+          subscriptionAttempts += 1;
+          if (subscriptionAttempts === 1) throw failure;
+          return () => undefined;
+        },
+      },
+    });
+
+    await expect(client.setSubject("alice")).resolves.toBeUndefined();
+    expect(client.getState()).toEqual({ status: "error", error: failure });
+    expect(read).not.toHaveBeenCalled();
+
+    await expect(client.setSubject("alice")).resolves.toEqual({ subject: "alice" });
+    expect(subscriptionAttempts).toBe(2);
+    expect(read).toHaveBeenCalledOnce();
+    expect(client.getSnapshot()).toEqual({ subject: "alice" });
+  });
+
   it("clears authority immediately on logout", async () => {
     const client = createAccessSnapshotClient({
       transport: {

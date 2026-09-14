@@ -73,6 +73,9 @@ describe("AccessOnce core", () => {
     const constraint = snapshot.grants[0]?.constraints[0];
     if (constraint?.kind === "ids") expect(Object.isFrozen(constraint.ids)).toBe(true);
     expect(Object.isFrozen(snapshot.subject)).toBe(true);
+
+    const unscoped = compile([{ permission: "record.read" }]);
+    expect(Object.isFrozen(unscoped.grants[0]?.constraints)).toBe(true);
   });
 
   it("carries descendant implications through a parent grant even when they leave the parent subtree", () => {

@@ -224,6 +224,8 @@ export function createAccessSnapshotClient<Subject, Snapshot>(
         subscribeSelectedSubject();
       } catch (error) {
         cancelCurrentWork();
+        // A retry of this same subject must reinstall push invalidation instead of taking the same-key fast path.
+        subjectKey = undefined;
         publish({ status: "error", error });
         return undefined;
       }

@@ -55,6 +55,8 @@ type MutableCompiledTransition = {
   removeGrantIndexes: number[];
 };
 
+const EMPTY_CONSTRAINTS: readonly never[] = Object.freeze([]);
+
 /** Stable key for deterministic deduplication of one compiled grant. */
 function compiledGrantKey<Leaf extends string, Dimension extends string, Attribute extends string>(
   grant: CompiledAccessGrant<Leaf, Dimension, Attribute>,
@@ -66,7 +68,7 @@ function compiledGrantKey<Leaf extends string, Dimension extends string, Attribu
 function normalizeConstraints<Dimension extends string, Attribute extends string>(
   scope: Readonly<Partial<Record<Dimension, import("./types.js").AccessScopeSource<Attribute>>>> | undefined,
 ): readonly CompiledAccessConstraint<Dimension, Attribute>[] | undefined {
-  if (!scope) return [];
+  if (!scope) return EMPTY_CONSTRAINTS;
   const constraints: CompiledAccessConstraint<Dimension, Attribute>[] = [];
   const dimensions = Object.keys(scope) as Dimension[];
   dimensions.sort();
