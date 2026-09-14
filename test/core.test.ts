@@ -483,6 +483,7 @@ describe("AccessOnce core", () => {
       ...snapshot,
       temporal: {
         grants: snapshot.temporal!.grants,
+        grantPositions: snapshot.temporal!.grantPositions,
         initialGrantIndexes: [99],
         transitions: snapshot.temporal!.transitions,
       },
