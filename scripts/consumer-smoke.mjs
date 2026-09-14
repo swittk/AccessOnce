@@ -66,7 +66,11 @@ function checkCore(module, label) {
       grants: [{ permission: "read", scope: { location: { kind: "ids", ids: ["a"] } } }],
     },
     approval: { kind: "automatic" },
+    reasonRequired: true,
   });
+  if (!requestRule.reasonRequired) {
+    throw new Error(`${label} build lost request-rule reason requirement`);
+  }
   if (!requestRule.canRequest({
     authority: {
       kind: "grant",
@@ -94,6 +98,9 @@ function checkCore(module, label) {
   }
   if (typeof module.createAccessRequestControlClient !== "function") {
     throw new Error(`${label} build is missing access request control client`);
+  }
+  if (typeof module.createAccessRequestHistoryClient !== "function") {
+    throw new Error(`${label} build is missing access request history client`);
   }
 
   const temporalSnapshot = model.compile({

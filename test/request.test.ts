@@ -59,7 +59,7 @@ function relationship(
 describe("access request rules", () => {
   it("uses the normal grant language for parents, implications and narrowing", () => {
     const rule = access.requestRule({
-      ruleId: "clinical",
+      ruleId: "restricted",
       allow: {
         kind: "grant",
         grants: [{
@@ -67,7 +67,7 @@ describe("access request rules", () => {
           scope: { location: ids("a", "b"), resource: ids("note", "image") },
         }],
       },
-      approval: { kind: "policy", policyId: "clinical-approver" },
+      approval: { kind: "policy", policyId: "record-approver" },
     });
 
     expect(rule.canRequest({
@@ -174,7 +174,7 @@ describe("access request rules", () => {
         resourceTypes: ["document", "encounter"],
         relations: ["reader", "editor"],
       },
-      approval: { kind: "policy", policyId: "clinical-access" },
+      approval: { kind: "policy", policyId: "restricted-record-access" },
       validity: { allowUnbounded: false, maximumDurationMs: 8 * 60 * 60 * 1000 },
     });
     expect(rule.canRequest({
@@ -263,7 +263,7 @@ function createStore(): AccessRequestStore<Permission, Dimension, Attribute, Rou
 /** Common manual actor-grant rule used by durable workflow tests. */
 function manualGrantRule() {
   return access.requestRule({
-    ruleId: "clinical",
+    ruleId: "restricted",
     allow: {
       kind: "grant",
       grants: [{
@@ -272,7 +272,7 @@ function manualGrantRule() {
         validity: { startsAtEpochMs: 0, endsAtEpochMs: 1000 },
       }],
     },
-    approval: { kind: "policy", policyId: "clinical-approver" },
+    approval: { kind: "policy", policyId: "record-approver" },
   });
 }
 
@@ -281,12 +281,57 @@ function documentRule() {
   return access.requestRule({
     ruleId: "document-access",
     allow: { kind: "relationship", resourceTypes: ["document"], relations: ["reader", "editor"] },
-    approval: { kind: "policy", policyId: "clinical-approver" },
+    approval: { kind: "policy", policyId: "record-approver" },
     validity: { allowUnbounded: false, maximumDurationMs: 1000 },
   });
 }
 
 describe("access request service", () => {
+  it("supports justified automatic timed access with durable audit timestamps", async () => {
+    const store = createStore();
+    let now = 10_000;
+    const rule = access.requestRule({
+      ruleId: "restricted-record",
+      allow: { kind: "relationship", resourceTypes: ["document"], relations: ["reader"] },
+      approval: { kind: "automatic" },
+      reasonRequired: true,
+      validity: { allowUnbounded: false, maximumWindows: 1, maximumDurationMs: 30 * 60 * 1000 },
+    });
+    const issued: Authority[] = [];
+    const service = createAccessRequestService({
+      catalog: access.catalog,
+      store,
+      nowEpochMs: () => now,
+      resolveRule: () => ({ rule }),
+      authorizeTransition: () => true,
+      async issue({ authority }) {
+        issued.push(authority);
+      },
+    });
+    const input = {
+      idempotencyKey: "justified-1",
+      subjectId: "u1",
+      ruleId: "restricted-record",
+      authority: relationship("r1", "reader", {
+        startsAtEpochMs: 10_000,
+        endsAtEpochMs: 10_000 + 15 * 60 * 1000,
+      }),
+    };
+    await expect(service.submit("u1", input)).rejects.toThrow(/reason/i);
+    expect(store.records.size).toBe(0);
+
+    now = 11_000;
+    const approved = await service.submit("u1", { ...input, reason: "Direct care review" });
+    expect(approved.state).toBe("approved");
+    expect(approved.reason).toBe("Direct care review");
+    expect(approved.submittedAtEpochMs).toBe(11_000);
+    expect(approved.decision).toMatchObject({
+      action: "approve",
+      decidedAtEpochMs: 11_000,
+      authority: input.authority,
+    });
+    expect(issued).toEqual([input.authority]);
+  });
   it("requires a resolvable route before creating a manual request", async () => {
     const store = createStore();
     const service = createAccessRequestService({
@@ -300,7 +345,7 @@ describe("access request service", () => {
     await expect(service.submit("u1", {
       idempotencyKey: "k1",
       subjectId: "u1",
-      ruleId: "clinical",
+      ruleId: "restricted",
       authority: grant({
         permission: "record.read",
         scope: { location: ids("a"), resource: ids("note") },
@@ -319,7 +364,7 @@ describe("access request service", () => {
       catalog: access.catalog,
       store,
       resolveRule: () => enabled ? { rule: manualGrantRule() } : undefined,
-      resolveApprovalRoute: () => ({ queue: "clinical" }),
+      resolveApprovalRoute: () => ({ queue: "restricted" }),
       authorizeTransition: ({ action }) => action !== "approve" || approverAllowed,
       async issue({ authority }) {
         issued.push(authority);
@@ -328,7 +373,7 @@ describe("access request service", () => {
     const pending = await service.submit("u1", {
       idempotencyKey: "k1",
       subjectId: "u1",
-      ruleId: "clinical",
+      ruleId: "restricted",
       authority: grant({
         permission: "record.read",
         scope: { location: ids("a"), resource: ids("note") },
@@ -359,7 +404,7 @@ describe("access request service", () => {
       catalog: access.catalog,
       store,
       resolveRule: () => ({ rule: manualGrantRule() }),
-      resolveApprovalRoute: () => ({ queue: "clinical" }),
+      resolveApprovalRoute: () => ({ queue: "restricted" }),
       authorizeTransition: () => true,
       async issue({ authority }) {
         issued.push(authority);
@@ -368,7 +413,7 @@ describe("access request service", () => {
     const pending = await service.submit("u1", {
       idempotencyKey: "narrow-grant",
       subjectId: "u1",
-      ruleId: "clinical",
+      ruleId: "restricted",
       authority: grant({
         permission: "record.read",
         scope: { location: ids("a", "b"), resource: ids("note", "image") },
@@ -399,7 +444,7 @@ describe("access request service", () => {
     const second = await service.submit("u2", {
       idempotencyKey: "broaden-grant",
       subjectId: "u2",
-      ruleId: "clinical",
+      ruleId: "restricted",
       authority: grant({
         permission: "record.read",
         scope: { location: ids("a"), resource: ids("note") },
@@ -428,7 +473,7 @@ describe("access request service", () => {
         authority.kind === "relationship" && authority.resource.id === "doc-1"
           ? { rule: documentRule() }
           : undefined,
-      resolveApprovalRoute: () => ({ queue: "clinical" }),
+      resolveApprovalRoute: () => ({ queue: "restricted" }),
       authorizeTransition: () => true,
       async issue({ authority }) {
         issued.push(authority);
@@ -477,7 +522,7 @@ describe("access request service", () => {
       catalog: access.catalog,
       store,
       resolveRule: () => ({ rule: documentRule() }),
-      resolveApprovalRoute: () => ({ queue: "clinical" }),
+      resolveApprovalRoute: () => ({ queue: "restricted" }),
       authorizeTransition: () => true,
       issue: async () => {},
     });
@@ -511,7 +556,7 @@ describe("access request service", () => {
       catalog: access.catalog,
       store,
       resolveRule: () => ({ rule: documentRule() }),
-      resolveApprovalRoute: () => ({ queue: "clinical" }),
+      resolveApprovalRoute: () => ({ queue: "restricted" }),
       authorizeTransition: () => true,
       async issue({ issuanceKey }) {
         committed.add(issuanceKey);
@@ -541,7 +586,7 @@ describe("access request service", () => {
       catalog: access.catalog,
       store,
       resolveRule: () => ({ rule: documentRule() }),
-      resolveApprovalRoute: () => ({ queue: "clinical" }),
+      resolveApprovalRoute: () => ({ queue: "restricted" }),
       authorizeTransition: () => true,
       issue: async () => {},
     });
@@ -642,7 +687,7 @@ describe("access request service", () => {
       catalog: access.catalog,
       store,
       resolveRule: () => ({ rule: documentRule() }),
-      resolveApprovalRoute: () => ({ queue: "clinical" }),
+      resolveApprovalRoute: () => ({ queue: "restricted" }),
       authorizeTransition: () => true,
       issue: async () => {},
     });

@@ -293,7 +293,7 @@ const documentAccess = access.requestRule({
     resourceTypes: ["document", "encounter"],
     relations: ["reader", "editor"],
   },
-  approval: { kind: "policy", policyId: "clinical-access" },
+  approval: { kind: "policy", policyId: "restricted-record-access" },
   validity: { allowUnbounded: false, maximumDurationMs: 8 * 60 * 60 * 1000 },
 });
 ```
@@ -368,7 +368,42 @@ await client.deny({
 
 Automatic rules use the same protocol: submission first records `pending`, then re-checks the current rule under the request's serialization boundary before claiming `issuing`. Manual rules must resolve an application route before request creation, so a request does not silently fall into an unowned queue.
 
-`createAccessRequestControlClient()` supplies only `submit`, `read`, `transition`, `approve`, `deny`, and `cancel`. It intentionally has no global list/catalog method: queue indexes and the decision to advertise a request are application concerns. Requester/approver identity should come from authenticated endpoint context rather than being trusted from the JSON wire.
+For justified self-service access, compose automatic approval with a required requester reason and bounded validity. This is useful for restricted resources where a user may obtain temporary access without waiting for a human approver, but every access grant must carry an auditable justification:
+
+```ts
+const justifiedReview = access.requestRule({
+  ruleId: "justified-record-review",
+  allow: {
+    kind: "relationship",
+    resourceTypes: ["record"],
+    relations: ["reader"],
+  },
+  approval: { kind: "automatic" },
+  reasonRequired: true,
+  validity: {
+    allowUnbounded: false,
+    maximumWindows: 1,
+    maximumDurationMs: 30 * 60 * 1000,
+  },
+});
+
+await client.submit({
+  idempotencyKey,
+  subjectId,
+  ruleId: justifiedReview.ruleId,
+  authority: {
+    kind: "relationship",
+    resource: { type: "record", id: recordId },
+    relation: "reader",
+    validity: { startsAtEpochMs: now, endsAtEpochMs: now + 15 * 60 * 1000 },
+  },
+  reason: "Review required for current work",
+});
+```
+
+Durable request records retain the requester reason and submission timestamp plus the final decision actor, reason, timestamp, and exact approved authority. `createAccessRequestHistoryClient()` is a separate audit/admin surface for bounded historical queries by requester, subject, rule, state, grant permission, relationship resource/relation, and submission/decision time. Its adapter contract explicitly requires query/index pushdown; AccessOnce does not provide a fallback that loads all history and filters it in JavaScript. Applications with large audit volumes should index or denormalize the fields they query frequently, commonly `(subjectId, submittedAtEpochMs)`, `(requesterId, submittedAtEpochMs)`, and for object access `(resourceType, resourceId, submittedAtEpochMs)`.
+
+`createAccessRequestControlClient()` supplies only `submit`, `read`, `transition`, `approve`, `deny`, and `cancel`. It intentionally has no global list/catalog method: queue indexes and the decision to advertise a request are application concerns. Historical listing lives on the separate audit client so ordinary requester UI does not gain an object-discovery surface. Requester/approver identity should come from authenticated endpoint context rather than being trusted from the JSON wire.
 
 ### 2. Effective-snapshot client transport
 

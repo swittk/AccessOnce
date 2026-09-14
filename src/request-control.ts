@@ -4,6 +4,8 @@ import type { AccessValidity } from "./types.js";
 import type {
   AccessRelationshipRequestAuthority,
   AccessRequestAuthority,
+  AccessRequestHistoryPage,
+  AccessRequestHistoryQuery,
   AccessRequestRecord,
   AccessRequestSubmit,
   AccessRequestTransition,
@@ -14,8 +16,38 @@ import type {
 export type AccessRequestDecodeOptions = {
   /** Maximum validity windows accepted on one requested/approved authority. */
   maximumValidityWindows?: number;
-  /** Maximum decision-reason length accepted from the transport. */
+  /** Maximum requester/decision reason length accepted from the transport. */
   maximumReasonLength?: number;
+  /** Maximum audit-history page size accepted from untrusted query payloads; defaults to 256. */
+  maximumHistoryPageSize?: number;
+};
+
+/** Separate transport for indexed audit/history reads so ordinary requester clients do not gain a discovery API. */
+export type AccessRequestHistoryTransport<
+  Permission extends string,
+  Dimension extends string,
+  Attribute extends string = string,
+  Route = unknown,
+> = {
+  /** Execute one bounded indexed history query; endpoint authorization remains application-owned. */
+  query(
+    request: AccessRequestHistoryQuery<Permission>,
+    signal?: AbortSignal,
+  ): Promise<AccessRequestHistoryPage<Permission, Dimension, Attribute, Route>>;
+};
+
+/** Small audit/admin client for indexed request-history queries. */
+export type AccessRequestHistoryClient<
+  Permission extends string,
+  Dimension extends string,
+  Attribute extends string = string,
+  Route = unknown,
+> = {
+  /** Query durable request history through the host's indexed backend implementation. */
+  query(
+    request: AccessRequestHistoryQuery<Permission>,
+    signal?: AbortSignal,
+  ): Promise<AccessRequestHistoryPage<Permission, Dimension, Attribute, Route>>;
 };
 
 /** Minimal read request for one durable access request. */
@@ -237,11 +269,115 @@ export function parseAccessRequestSubmitRequest<
   options: AccessRequestDecodeOptions = {},
 ): AccessRequestSubmit<Permission, Dimension, Attribute> {
   const request = requestWireRecord(input, "access request submit request");
+  const reason = requestWireReason(request.reason, options);
   return {
     idempotencyKey: requestWireString(request.idempotencyKey, "idempotencyKey"),
     subjectId: requestWireString(request.subjectId, "subjectId"),
     ruleId: requestWireString(request.ruleId, "ruleId"),
     authority: parseAccessRequestAuthority(access, request.authority, options),
+    ...(reason === undefined ? {} : { reason }),
+  };
+}
+
+/** Decode one optional safe-integer history timestamp. */
+function requestHistoryTime(value: unknown, label: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value)) throw new Error(`${label} must be a safe integer`);
+  return Number(value);
+}
+
+/** Decode a bounded audit-history query without ever implementing an in-memory scan fallback. */
+export function parseAccessRequestHistoryQuery<
+  Permission extends string,
+  Leaf extends Permission,
+  Dimension extends string,
+  Attribute extends string,
+>(
+  access: Access<Permission, Leaf, Dimension, Attribute>,
+  input: unknown,
+  options: AccessRequestDecodeOptions = {},
+): AccessRequestHistoryQuery<Permission> {
+  const request = requestWireRecord(input, "access request history query");
+  const requesterId = request.requesterId === undefined ? undefined : requestWireString(request.requesterId, "requesterId");
+  const subjectId = request.subjectId === undefined ? undefined : requestWireString(request.subjectId, "subjectId");
+  const ruleId = request.ruleId === undefined ? undefined : requestWireString(request.ruleId, "ruleId");
+  let states: AccessRequestHistoryQuery<Permission>["states"];
+  if (request.states !== undefined) {
+    if (!Array.isArray(request.states) || request.states.length === 0) throw new Error("states must be a non-empty array");
+    const allowed = new Set(["pending", "issuing", "approved", "denied", "cancelled", "expired"]);
+    const parsed: Array<"pending" | "issuing" | "approved" | "denied" | "cancelled" | "expired"> = [];
+    for (const state of request.states) {
+      if (typeof state !== "string" || !allowed.has(state)) throw new Error("states contains an invalid access request state");
+      if (!parsed.includes(state as (typeof parsed)[number])) parsed.push(state as (typeof parsed)[number]);
+    }
+    states = parsed;
+  }
+  const authorityKind = request.authorityKind;
+  if (authorityKind !== undefined && authorityKind !== "grant" && authorityKind !== "relationship") {
+    throw new Error("authorityKind must be grant or relationship");
+  }
+  let permission: Permission | undefined;
+  if (request.permission !== undefined) {
+    if (typeof request.permission !== "string" || !access.catalog.isPermission(request.permission)) {
+      throw new Error("permission must be a catalog permission");
+    }
+    permission = request.permission;
+  }
+  const resourceType = request.resourceType === undefined ? undefined : requestWireString(request.resourceType, "resourceType");
+  const resourceId = request.resourceId === undefined ? undefined : requestWireString(request.resourceId, "resourceId");
+  if (resourceId !== undefined && resourceType === undefined) throw new Error("resourceId requires resourceType");
+  const relation = request.relation === undefined ? undefined : requestWireString(request.relation, "relation");
+  const submittedFromEpochMs = requestHistoryTime(request.submittedFromEpochMs, "submittedFromEpochMs");
+  const submittedUntilEpochMs = requestHistoryTime(request.submittedUntilEpochMs, "submittedUntilEpochMs");
+  const decidedFromEpochMs = requestHistoryTime(request.decidedFromEpochMs, "decidedFromEpochMs");
+  const decidedUntilEpochMs = requestHistoryTime(request.decidedUntilEpochMs, "decidedUntilEpochMs");
+  if (submittedFromEpochMs !== undefined && submittedUntilEpochMs !== undefined && submittedFromEpochMs > submittedUntilEpochMs) {
+    throw new Error("submittedFromEpochMs must not be after submittedUntilEpochMs");
+  }
+  if (decidedFromEpochMs !== undefined && decidedUntilEpochMs !== undefined && decidedFromEpochMs > decidedUntilEpochMs) {
+    throw new Error("decidedFromEpochMs must not be after decidedUntilEpochMs");
+  }
+  const cursor = request.cursor === undefined ? undefined : requestWireString(request.cursor, "cursor");
+  const maximum = options.maximumHistoryPageSize ?? 256;
+  let limit: number | undefined;
+  if (request.limit !== undefined) {
+    if (!Number.isInteger(request.limit) || Number(request.limit) < 1 || Number(request.limit) > maximum) {
+      throw new Error(`limit must be an integer between 1 and ${maximum}`);
+    }
+    limit = Number(request.limit);
+  }
+  return {
+    ...(requesterId === undefined ? {} : { requesterId }),
+    ...(subjectId === undefined ? {} : { subjectId }),
+    ...(ruleId === undefined ? {} : { ruleId }),
+    ...(states === undefined ? {} : { states }),
+    ...(authorityKind === undefined ? {} : { authorityKind }),
+    ...(permission === undefined ? {} : { permission }),
+    ...(resourceType === undefined ? {} : { resourceType }),
+    ...(resourceId === undefined ? {} : { resourceId }),
+    ...(relation === undefined ? {} : { relation }),
+    ...(submittedFromEpochMs === undefined ? {} : { submittedFromEpochMs }),
+    ...(submittedUntilEpochMs === undefined ? {} : { submittedUntilEpochMs }),
+    ...(decidedFromEpochMs === undefined ? {} : { decidedFromEpochMs }),
+    ...(decidedUntilEpochMs === undefined ? {} : { decidedUntilEpochMs }),
+    ...(cursor === undefined ? {} : { cursor }),
+    ...(limit === undefined ? {} : { limit }),
+  };
+}
+
+/** Create a separate audit/admin history client over any indexed application transport. */
+export function createAccessRequestHistoryClient<
+  Permission extends string,
+  Dimension extends string,
+  Attribute extends string = string,
+  Route = unknown,
+>(
+  transport: AccessRequestHistoryTransport<Permission, Dimension, Attribute, Route>,
+): AccessRequestHistoryClient<Permission, Dimension, Attribute, Route> {
+  return {
+    query(request, signal) {
+      return transport.query(request, signal);
+    },
   };
 }
 
@@ -316,6 +452,7 @@ export function createAccessRequestControlClient<
           subjectId: args.subjectId,
           ruleId: args.ruleId,
           authority: args.authority,
+          ...(args.reason === undefined ? {} : { reason: args.reason }),
         },
         args.signal,
       );

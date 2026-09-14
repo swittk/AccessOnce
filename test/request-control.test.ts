@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   createAccessRequestControlClient,
+  createAccessRequestHistoryClient,
   createHierarchicalAccess,
+  parseAccessRequestHistoryQuery,
   parseAccessRequestReadRequest,
   parseAccessRequestSubmitRequest,
   parseAccessRequestTransitionRequest,
@@ -27,7 +29,7 @@ describe("access request control wire", () => {
     expect(parseAccessRequestSubmitRequest(access, {
       idempotencyKey: "k1",
       subjectId: "u1",
-      ruleId: "clinical",
+      ruleId: "restricted",
       authority: {
         kind: "grant",
         grant: {
@@ -38,7 +40,7 @@ describe("access request control wire", () => {
     })).toEqual({
       idempotencyKey: "k1",
       subjectId: "u1",
-      ruleId: "clinical",
+      ruleId: "restricted",
       authority: {
         kind: "grant",
         grant: {
@@ -91,7 +93,7 @@ describe("access request control wire", () => {
     expect(() => parseAccessRequestSubmitRequest(access, {
       idempotencyKey: "k1",
       subjectId: "u1",
-      ruleId: "clinical",
+      ruleId: "restricted",
       authority: {
         kind: "grant",
         grant: {
@@ -138,7 +140,7 @@ describe("access request control wire", () => {
       requestId: "r1",
       revision: "1",
       requesterId: "u1",
-      approval: { kind: "policy" as const, policyId: "clinical" },
+      approval: { kind: "policy" as const, policyId: "restricted" },
       state: "pending" as const,
     }));
     const read = vi.fn(async () => ({
@@ -153,7 +155,7 @@ describe("access request control wire", () => {
         resource: { type: "document", id: "doc-1" },
         relation: "reader",
       },
-      approval: { kind: "policy" as const, policyId: "clinical" },
+      approval: { kind: "policy" as const, policyId: "restricted" },
       state: "pending" as const,
     }));
     const transition = vi.fn(async () => read());
@@ -202,4 +204,43 @@ describe("access request control wire", () => {
       reason: "no",
     }, controller.signal);
   });
+
+  it("parses bounded indexed history queries and keeps history on a separate audit client", async () => {
+    expect(parseAccessRequestHistoryQuery(access, {
+      subjectId: "u1",
+      ruleId: "restricted-record",
+      authorityKind: "relationship",
+      resourceType: "record",
+      resourceId: "r1",
+      relation: "reader",
+      states: ["approved", "denied"],
+      submittedFromEpochMs: 100,
+      submittedUntilEpochMs: 200,
+      limit: 50,
+    }, { maximumHistoryPageSize: 100 })).toEqual({
+      subjectId: "u1",
+      ruleId: "restricted-record",
+      authorityKind: "relationship",
+      resourceType: "record",
+      resourceId: "r1",
+      relation: "reader",
+      states: ["approved", "denied"],
+      submittedFromEpochMs: 100,
+      submittedUntilEpochMs: 200,
+      limit: 50,
+    });
+    expect(() => parseAccessRequestHistoryQuery(access, {
+      resourceId: "r1",
+    })).toThrow(/resourceType/i);
+    expect(() => parseAccessRequestHistoryQuery(access, {
+      limit: 101,
+    }, { maximumHistoryPageSize: 100 })).toThrow(/limit/i);
+
+    const query = vi.fn(async (request, signal) => ({ requests: [], cursor: request.cursor }));
+    const history = createAccessRequestHistoryClient({ query });
+    const controller = new AbortController();
+    await history.query({ subjectId: "u1", cursor: "next" }, controller.signal);
+    expect(query).toHaveBeenCalledWith({ subjectId: "u1", cursor: "next" }, controller.signal);
+  });
+
 });

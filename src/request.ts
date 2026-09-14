@@ -108,6 +108,8 @@ export type AccessRequestRuleDefinition<
   allow: AccessRequestAllowance<Permission, Dimension, Attribute>;
   /** Automatic or application-routed approval behavior. */
   approval: AccessRequestApproval;
+  /** Require a non-empty requester reason before this rule can create authority. */
+  reasonRequired?: boolean;
   /** Optional temporal limits applied to either authority kind. */
   validity?: AccessRequestValidityLimits;
 };
@@ -153,6 +155,8 @@ export type AccessRequestRule<
   readonly ruleId: string;
   /** Approval behavior carried by this rule. */
   readonly approval: AccessRequestApproval;
+  /** Whether submission must include a non-empty requester reason. */
+  readonly reasonRequired: boolean;
   /** Evaluate one exact authority against the rule. */
   evaluate(args: {
     /** Exact actor grant or object relationship being requested. */
@@ -507,6 +511,7 @@ export function defineAccessRequestRule<Permission extends string, Leaf extends 
   }
   const ruleId = definition.ruleId;
   const approval = Object.freeze({ ...definition.approval }) as AccessRequestApproval;
+  const reasonRequired = definition.reasonRequired === true;
   const limits = definition.validity === undefined ? undefined : Object.freeze({ ...definition.validity });
 
   /** Evaluate one authority using the immutable compiled rule. */
@@ -577,6 +582,7 @@ export function defineAccessRequestRule<Permission extends string, Leaf extends 
   return Object.freeze({
     ruleId,
     approval,
+    reasonRequired,
     evaluate,
     canRequest(args) {
       return evaluate(args).requestable;
@@ -594,6 +600,8 @@ export type AccessRequestSubmit<Permission extends string, Dimension extends str
   ruleId: string;
   /** Exact actor grant or object relationship requested. */
   authority: AccessRequestAuthority<Permission, Dimension, Attribute>;
+  /** Optional requester-supplied justification retained verbatim for audit/UI. */
+  reason?: string;
 };
 
 /** User-facing terminal action supported by the request transition wire. */
@@ -607,6 +615,8 @@ export type AccessRequestDecision<Permission extends string, Dimension extends s
   actorId?: string;
   /** Optional application-facing explanation retained for audit/UI. */
   reason?: string;
+  /** Host-clock instant when this decision was durably claimed. */
+  decidedAtEpochMs: number;
   /** Exact authority selected for approval; omitted for non-approve decisions. */
   authority?: AccessRequestAuthority<Permission, Dimension, Attribute>;
 };
@@ -639,6 +649,8 @@ export type AccessRequestCreate<
   requesterId: string;
   /** Approval behavior selected when the request was accepted. */
   approval: AccessRequestApproval;
+  /** Host-clock instant when the durable request was first created. */
+  submittedAtEpochMs: number;
   /** Current durable lifecycle state. */
   state: AccessRequestState;
   /** Optional application-owned queue/routing token for manual approval. */
@@ -700,6 +712,76 @@ export type AccessRequestStore<
     next: AccessRequestCreate<Permission, Dimension, Attribute, Route>,
   ): Promise<AccessRequestRecord<Permission, Dimension, Attribute, Route>>;
 };
+
+/** Current application resolution for a request rule, including subject values needed by relative grant ceilings. */
+/** Indexed audit/history query over durable request records; adapters must push filters into storage. */
+export type AccessRequestHistoryQuery<Permission extends string = string> = {
+  /** Restrict to one authenticated requester. */
+  requesterId?: string;
+  /** Restrict to one authority subject/principal. */
+  subjectId?: string;
+  /** Restrict to one application request rule. */
+  ruleId?: string;
+  /** Restrict to durable lifecycle states. */
+  states?: readonly AccessRequestState[];
+  /** Restrict to actor-grant or exact-resource relationship requests. */
+  authorityKind?: "grant" | "relationship";
+  /** Restrict grant requests to one permission. */
+  permission?: Permission;
+  /** Restrict relationship requests to one resource namespace. */
+  resourceType?: string;
+  /** Restrict relationship requests to one exact resource id; requires resourceType. */
+  resourceId?: string;
+  /** Restrict relationship requests to one relation. */
+  relation?: string;
+  /** Inclusive lower bound on request submission time. */
+  submittedFromEpochMs?: number;
+  /** Exclusive upper bound on request submission time. */
+  submittedUntilEpochMs?: number;
+  /** Inclusive lower bound on terminal/issuance decision time. */
+  decidedFromEpochMs?: number;
+  /** Exclusive upper bound on terminal/issuance decision time. */
+  decidedUntilEpochMs?: number;
+  /** Opaque adapter cursor from the previous page. */
+  cursor?: string;
+  /** Requested page bound; adapters may impose a smaller limit. */
+  limit?: number;
+};
+
+/** One bounded page from an indexed durable request-history query. */
+export type AccessRequestHistoryPage<
+  Permission extends string,
+  Dimension extends string,
+  Attribute extends string = string,
+  Route = unknown,
+> = {
+  /** Durable requests matching the pushed-down history query. */
+  requests: readonly AccessRequestRecord<Permission, Dimension, Attribute, Route>[];
+  /** Opaque continuation cursor when another page exists. */
+  cursor?: string;
+};
+
+/** Read-only indexed history adapter; implementations must not satisfy filters by scanning all request rows in memory. */
+export type AccessRequestHistoryAdapter<
+  Permission extends string,
+  Dimension extends string,
+  Attribute extends string = string,
+  Route = unknown,
+> = {
+  /** Push the supplied filters/pagination into the durable store/index and return one bounded page. */
+  queryHistory(
+    query: AccessRequestHistoryQuery<Permission>,
+  ): Promise<AccessRequestHistoryPage<Permission, Dimension, Attribute, Route>>;
+};
+
+/** Convenience shape for stores that support both durable request mutation and indexed audit history. */
+export type AccessRequestQueryableStore<
+  Permission extends string,
+  Dimension extends string,
+  Attribute extends string = string,
+  Route = unknown,
+> = AccessRequestStore<Permission, Dimension, Attribute, Route> &
+  AccessRequestHistoryAdapter<Permission, Dimension, Attribute, Route>;
 
 /** Current application resolution for a request rule, including subject values needed by relative grant ceilings. */
 export type AccessRequestRuleResolution<Permission extends string, Dimension extends string, Attribute extends string = string> = {
@@ -829,6 +911,7 @@ function assertSameRequestSubmission<Permission extends string, Dimension extend
     existing.requesterId !== requesterId ||
     existing.subjectId !== request.subjectId ||
     existing.ruleId !== request.ruleId ||
+    (existing.reason?.trim() ?? undefined) !== (request.reason?.trim() ?? undefined) ||
     accessRequestAuthorityKey(existing.authority) !== accessRequestAuthorityKey(request.authority)
   ) {
     throw new Error("access request idempotency key was already used for different authority");
@@ -847,7 +930,9 @@ function requestWithState<Permission extends string, Dimension extends string, A
     subjectId: request.subjectId,
     ruleId: request.ruleId,
     authority: request.authority,
+    ...(request.reason === undefined ? {} : { reason: request.reason }),
     approval: request.approval,
+    submittedAtEpochMs: request.submittedAtEpochMs,
     state,
     ...(request.route === undefined ? {} : { route: request.route }),
     ...(decision === undefined ? {} : { decision }),
@@ -860,6 +945,8 @@ export function createAccessRequestService<Permission extends string, Leaf exten
   catalog: AccessCatalog<Permission, Leaf, Dimension>;
   /** Durable request storage and per-request serialization supplied by the application. */
   store: AccessRequestStore<Permission, Dimension, Attribute, Route>;
+  /** Cold control-plane clock used only for audit timestamps; defaults to Date.now. */
+  nowEpochMs?: () => number;
   /** Resolve the currently applicable rule; returning undefined makes the request unavailable. */
   resolveRule(args: {
     /** Authenticated original requester. */
@@ -884,6 +971,21 @@ export function createAccessRequestService<Permission extends string, Leaf exten
     args: AccessRequestIssuance<Permission, Dimension, Attribute, Route>,
   ): Promise<void>;
 }): AccessRequestService<Permission, Dimension, Attribute, Route> {
+  /** Return one safe host-clock timestamp for durable audit metadata. */
+  function nowEpochMs(): number {
+    const value = (options.nowEpochMs ?? Date.now)();
+    if (!Number.isSafeInteger(value)) throw new Error("access request audit clock must return a safe integer");
+    return value;
+  }
+
+  /** Normalize one optional requester reason while preserving application-owned text semantics. */
+  function normalizedReason(reason: string | undefined): string | undefined {
+    if (reason === undefined) return undefined;
+    const normalized = reason.trim();
+    if (!normalized) throw new Error("access request reason must not be empty when supplied");
+    return normalized;
+  }
+
   /** Load one request or fail without fabricating nonexistence/authorization semantics. */
   async function requireRequest(requestId: string) {
     const request = await options.store.read(requestId);
@@ -893,7 +995,7 @@ export function createAccessRequestService<Permission extends string, Leaf exten
 
   /** Resolve the current app-selected rule and require that it still proves the selected approval authority. */
   async function requireCurrentRule(
-    request: Pick<AccessRequestCreate<Permission, Dimension, Attribute, Route>, "requesterId" | "subjectId" | "ruleId" | "authority">,
+    request: Pick<AccessRequestCreate<Permission, Dimension, Attribute, Route>, "requesterId" | "subjectId" | "ruleId" | "authority" | "reason">,
     authority: AccessRequestAuthority<Permission, Dimension, Attribute>,
   ): Promise<AccessRequestRuleResolution<Permission, Dimension, Attribute>> {
     const resolution = await options.resolveRule({
@@ -911,6 +1013,9 @@ export function createAccessRequestService<Permission extends string, Leaf exten
     });
     if (!evaluation.requestable) {
       throw new Error(`access request is no longer requestable: ${evaluation.reason}`);
+    }
+    if (resolution.rule.reasonRequired && !request.reason?.trim()) {
+      throw new Error("access request reason is required by the current rule");
     }
     return resolution;
   }
@@ -944,7 +1049,11 @@ export function createAccessRequestService<Permission extends string, Leaf exten
     current = await options.store.compareAndSet(
       current.requestId,
       current.revision,
-      requestWithState(current, "issuing", { action: "approve", authority: current.authority }),
+      requestWithState(current, "issuing", {
+        action: "approve",
+        authority: current.authority,
+        decidedAtEpochMs: nowEpochMs(),
+      }),
     );
     return finishIssuance(current);
   }
@@ -955,10 +1064,14 @@ export function createAccessRequestService<Permission extends string, Leaf exten
       if (!request.idempotencyKey.trim()) throw new Error("idempotencyKey must not be empty");
       if (!request.subjectId.trim()) throw new Error("subjectId must not be empty");
       if (!request.ruleId.trim()) throw new Error("ruleId must not be empty");
+      const reason = normalizedReason(request.reason);
 
       const existing = await options.store.readByIdempotency(requesterId, request.idempotencyKey);
       if (existing) {
-        assertSameRequestSubmission(existing, requesterId, request);
+        assertSameRequestSubmission(existing, requesterId, {
+          ...request,
+          ...(reason === undefined ? {} : { reason }),
+        });
         if (
           existing.state === "issuing" ||
           (existing.state === "pending" && existing.approval.kind === "automatic")
@@ -984,6 +1097,9 @@ export function createAccessRequestService<Permission extends string, Leaf exten
       if (!evaluation.requestable) {
         throw new Error(`access request is not requestable: ${evaluation.reason}`);
       }
+      if (resolution.rule.reasonRequired && reason === undefined) {
+        throw new Error("access request reason is required by this rule");
+      }
 
       let route: Route | undefined;
       if (evaluation.approval.kind === "policy") {
@@ -1004,11 +1120,16 @@ export function createAccessRequestService<Permission extends string, Leaf exten
         subjectId: request.subjectId,
         ruleId: request.ruleId,
         authority: request.authority,
+        ...(reason === undefined ? {} : { reason }),
         approval: evaluation.approval,
+        submittedAtEpochMs: nowEpochMs(),
         state: "pending",
         ...(route === undefined ? {} : { route }),
       });
-      assertSameRequestSubmission(created.request, requesterId, request);
+      assertSameRequestSubmission(created.request, requesterId, {
+        ...request,
+        ...(reason === undefined ? {} : { reason }),
+      });
       if (
         created.request.state === "issuing" ||
         (created.request.state === "pending" && created.request.approval.kind === "automatic")
@@ -1076,6 +1197,7 @@ export function createAccessRequestService<Permission extends string, Leaf exten
             requestWithState(current, transition.action === "deny" ? "denied" : "cancelled", {
               action: transition.action,
               actorId,
+              decidedAtEpochMs: nowEpochMs(),
               ...(transition.reason === undefined ? {} : { reason: transition.reason }),
             }),
           );
@@ -1088,6 +1210,7 @@ export function createAccessRequestService<Permission extends string, Leaf exten
             action: "approve",
             actorId,
             authority: approvedAuthority!,
+            decidedAtEpochMs: nowEpochMs(),
             ...(transition.reason === undefined ? {} : { reason: transition.reason }),
           }),
         );
@@ -1106,7 +1229,10 @@ export function createAccessRequestService<Permission extends string, Leaf exten
         return options.store.compareAndSet(
           requestId,
           current.revision,
-          requestWithState(current, "expired", { action: "expire" }),
+          requestWithState(current, "expired", {
+            action: "expire",
+            decidedAtEpochMs: nowEpochMs(),
+          }),
         );
       });
     },
