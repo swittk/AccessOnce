@@ -318,14 +318,58 @@ export function materializeAccessRelationshipAt(
   atEpochMs: number
 ): MaterializedAccessRelationship {
   if (!Number.isSafeInteger(atEpochMs)) throw new RangeError("atEpochMs must be a safe integer");
-  const principals = new Map<string, AccessPrincipal>();
-  let nextTransitionAtEpochMs: number | undefined;
-  for (const subject of source.subjects) {
-    const evaluated = relationshipSubjectAt(subject, atEpochMs);
-    if (evaluated.active) {
-      const key = relationshipPrincipalKey(subject.principal);
-      if (!principals.has(key)) principals.set(key, subject.principal);
+
+  const grouped = new Map<
+    string,
+    {
+      /** First source principal retained for this stable identity. */
+      principal: AccessPrincipal;
+      /** Combined temporal contributions; undefined means at least one timeless source exists. */
+      validity: AccessValidity[] | undefined;
     }
+  >();
+  for (const subject of source.subjects) {
+    // Validate every source entry even when another timeless entry makes its temporal contribution redundant.
+    relationshipValidityKey(subject.validity);
+    const key = relationshipPrincipalKey(subject.principal);
+    const current = grouped.get(key);
+    if (!current) {
+      const normalized = relationshipValidityKey(subject.validity);
+      grouped.set(key, {
+        principal: subject.principal,
+        validity: normalized === null
+          ? undefined
+          : normalized.map(([start, end]) => ({
+              ...(start === null ? {} : { startsAtEpochMs: start }),
+              ...(end === null ? {} : { endsAtEpochMs: end }),
+            })),
+      });
+      continue;
+    }
+
+    // One timeless source keeps this principal continuously effective regardless of other temporal entries.
+    if (current.validity === undefined) continue;
+    const normalized = relationshipValidityKey(subject.validity);
+    if (normalized === null) {
+      current.validity = undefined;
+      continue;
+    }
+    for (const [start, end] of normalized) {
+      current.validity.push({
+        ...(start === null ? {} : { startsAtEpochMs: start }),
+        ...(end === null ? {} : { endsAtEpochMs: end }),
+      });
+    }
+  }
+
+  const principals: AccessPrincipal[] = [];
+  let nextTransitionAtEpochMs: number | undefined;
+  for (const { principal, validity } of grouped.values()) {
+    const evaluated = relationshipSubjectAt(
+      validity === undefined ? { principal } : { principal, validity },
+      atEpochMs,
+    );
+    if (evaluated.active) principals.push(principal);
     const next = evaluated.nextTransitionAtEpochMs;
     if (next !== undefined &&
         (nextTransitionAtEpochMs === undefined || next < nextTransitionAtEpochMs)) {
@@ -334,7 +378,7 @@ export function materializeAccessRelationshipAt(
   }
   return Object.freeze({
     unrestricted: source.unrestricted,
-    principals: Object.freeze([...principals.values()]),
+    principals: Object.freeze(principals),
     ...(nextTransitionAtEpochMs === undefined ? {} : { nextTransitionAtEpochMs }),
   });
 }

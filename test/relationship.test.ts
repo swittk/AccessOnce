@@ -121,10 +121,11 @@ describe("relationship ACL adapter", () => {
         { principal: { type: "user", id: "always" } },
         {
           principal: { type: "user", id: "alice" },
-          validity: [
-            { startsAtEpochMs: 10, endsAtEpochMs: 20 },
-            { startsAtEpochMs: 15, endsAtEpochMs: 30 },
-          ],
+          validity: { startsAtEpochMs: 10, endsAtEpochMs: 20 },
+        },
+        {
+          principal: { type: "user", id: "alice" },
+          validity: { startsAtEpochMs: 15, endsAtEpochMs: 30 },
         },
         {
           principal: { type: "role", id: "future" },
@@ -166,6 +167,25 @@ describe("relationship ACL adapter", () => {
         { type: "user", id: "always" },
         { type: "role", id: "future" },
       ],
+    });
+
+    expect(
+      materializeAccessRelationshipAt(
+        {
+          unrestricted: false,
+          subjects: [
+            {
+              principal: { type: "user", id: "permanent" },
+              validity: { endsAtEpochMs: 20 },
+            },
+            { principal: { type: "user", id: "permanent" } },
+          ],
+        },
+        15,
+      ),
+    ).toEqual({
+      unrestricted: false,
+      principals: [{ type: "user", id: "permanent" }],
     });
   });
 
