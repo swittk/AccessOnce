@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import {
   compileAccessSnapshot,
   createAccessEvaluator,
+  createAccessEvaluationFactory,
   createAdaptedAccessEvaluator,
   defineAccessCatalog,
 } from "../dist/index.js";
@@ -111,3 +112,37 @@ const correlatedAdaptedRate = measure("correlated-adapted", () =>
   adapted.can(correlatedExternalSnapshot, "p.0", correlatedContext),
 );
 requireAdaptedRatio("correlated", correlatedCanonicalRate, correlatedAdaptedRate);
+
+
+/** Temporal evaluation must not tax the timeless evaluator; same-interval resolution stays request-cheap. */
+const temporalSnapshot = compileAccessSnapshot(catalog, {
+  grants: [{
+    permission: "p.4",
+    scope: {
+      location: { kind: "ids", ids: ["l4", "l5"] },
+      resource: { kind: "ids", ids: ["r4"] },
+    },
+    validity: [
+      { startsAtEpochMs: 100, endsAtEpochMs: 200 },
+      { startsAtEpochMs: 300, endsAtEpochMs: 400 },
+    ],
+  }],
+});
+const temporal = createAccessEvaluationFactory(canonical);
+const boundTemporal = temporal.evaluateAt(temporalSnapshot, 150);
+const temporalBoundRate = measure("temporal-bound", () =>
+  boundTemporal.can("p.4", context),
+);
+const temporalResolveRate = measure("temporal-same-interval", () =>
+  temporal.evaluateAt(temporalSnapshot, 150).can("p.4", context),
+);
+if (temporalBoundRate < canonicalRate * 0.75) {
+  throw new Error(
+    `bound temporal evaluator fell below 75% of canonical throughput: ${Math.round(temporalBoundRate)} vs ${Math.round(canonicalRate)}`,
+  );
+}
+if (temporalResolveRate < 5_000_000) {
+  throw new Error(
+    `same-interval evaluateAt fell below 5,000,000 checks/s: ${Math.round(temporalResolveRate)}`,
+  );
+}

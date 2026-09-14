@@ -58,6 +58,23 @@ function checkCore(module, label) {
   if (composed.contributions.length !== 2) {
     throw new Error(`${label} build lost source provenance`);
   }
+
+  const temporalSnapshot = model.compile({
+    grants: [{
+      permission: "read",
+      scope: { location: { kind: "ids", ids: ["timed"] } },
+      validity: { startsAtEpochMs: 10, endsAtEpochMs: 20 },
+    }],
+  });
+  if (model.can(temporalSnapshot, "read", { location: "timed" })) {
+    throw new Error(`${label} build leaked temporal authority into timeless can()`);
+  }
+  if (!model.evaluateAt(temporalSnapshot, 10).can("read", { location: "timed" })) {
+    throw new Error(`${label} build failed temporal evaluation at the inclusive boundary`);
+  }
+  if (model.evaluateAt(temporalSnapshot, 20).can("read", { location: "timed" })) {
+    throw new Error(`${label} build failed temporal evaluation at the exclusive boundary`);
+  }
 }
 
 checkCore(esm, "esm");
@@ -104,4 +121,4 @@ if (typeof esmClient.createAccessSnapshotClient !== "function") {
 if (typeof cjsClient.createAccessSnapshotClient !== "function") {
   throw new Error("CJS client subpath is missing createAccessSnapshotClient");
 }
-console.log("consumer-smoke: ESM, CJS, client, control, relationship ACL, React, and AuthZEN surfaces ok");
+console.log("consumer-smoke: ESM, CJS, temporal evaluation, client, control, relationship ACL, React, and AuthZEN surfaces ok");

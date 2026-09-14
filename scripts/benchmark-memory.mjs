@@ -83,6 +83,18 @@ snapshots = [];
 collectGarbage();
 const released = memorySample();
 
+const temporalSample = compileAccessSnapshot(catalog, {
+  grants: Array.from({ length: 8 }, (_, grantIndex) => ({
+    permission: leaves[grantIndex],
+    scope: { location: { kind: "ids", ids: [`l${grantIndex}`] } },
+    validity: [
+      { startsAtEpochMs: 100 + grantIndex, endsAtEpochMs: 200 + grantIndex },
+      { startsAtEpochMs: 300 + grantIndex, endsAtEpochMs: 400 + grantIndex },
+      { startsAtEpochMs: 500 + grantIndex },
+    ],
+  })),
+});
+const temporalWireBytes = Buffer.byteLength(JSON.stringify(temporalSample));
 const wireBytesPerSnapshot = Math.round(sampledWireBytes / 500);
 const compiledHeapBytesPerSnapshot = Math.max(
   0,
@@ -108,6 +120,7 @@ const result = {
   snapshotCount,
   grantsPerSnapshot: 8,
   wireBytesPerSnapshot,
+  temporalWireBytes,
   compiledHeapBytesPerSnapshot,
   indexHeapBytesPerSnapshot,
   peakRssDeltaBytes,
@@ -119,6 +132,9 @@ console.log(JSON.stringify(result, null, 2));
 // These bounds are intentionally loose enough for CI/V8 variance but tight enough to catch structural bloat/leaks.
 if (wireBytesPerSnapshot > 2_048) {
   throw new Error(`Compiled snapshot wire size exceeded 2 KiB gate: ${wireBytesPerSnapshot}`);
+}
+if (temporalWireBytes > 4_096) {
+  throw new Error(`Representative temporal snapshot wire size exceeded 4 KiB gate: ${temporalWireBytes}`);
 }
 if (compiledHeapBytesPerSnapshot > 8_192) {
   throw new Error(

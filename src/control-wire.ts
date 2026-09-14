@@ -6,7 +6,7 @@ import {
   type AccessControlPlaneOptions,
   type AccessPublicationControlPlaneOptions,
 } from "./control.js";
-import type { AccessGrant, AccessScopeSource, EffectiveAccessSnapshot } from "./types.js";
+import type { AccessGrant, AccessScopeSource, AccessValidity, EffectiveAccessSnapshot } from "./types.js";
 
 /** One or several values accepted by ergonomic control-client helpers. */
 export type AccessOneOrMany<Value> = Value | readonly Value[];
@@ -94,7 +94,7 @@ export type AccessGrantControlState<
   grants: readonly AccessGrant<Permission, Dimension, Attribute>[];
 };
 
-/** BYO client transport for AccessOnce control-plane mutations over Parse Cloud, REST, RPC, IPC, or another wire. */
+/** BYO client transport for AccessOnce control-plane mutations over REST, RPC, IPC, or another wire. */
 export type AccessControlMutationTransport<Mutation, Response> = {
   /** Send one optimistic-concurrency mutation request to the authoritative backend. */
   mutate(
@@ -206,6 +206,47 @@ export type AccessGrantControlClient<
   }): Promise<State>;
 };
 
+/** Canonicalize temporal windows for stable editor equality without invoking the snapshot compiler. */
+function accessValidityKey(
+  validity: AccessValidity | readonly AccessValidity[] | undefined,
+): readonly (readonly [number | null, number | null])[] | null {
+  if (validity === undefined) return null;
+  const input = Array.isArray(validity) ? validity : [validity];
+  const windows: Array<[number | null, number | null]> = [];
+  for (const window of input) {
+    const start = window.startsAtEpochMs ?? null;
+    const end = window.endsAtEpochMs ?? null;
+    if (start === null && end === null) return null;
+    if (start !== null && end !== null && start === end) continue;
+    windows.push([start, end]);
+  }
+  windows.sort((left, right) => {
+    const leftStart = left[0] ?? Number.NEGATIVE_INFINITY;
+    const rightStart = right[0] ?? Number.NEGATIVE_INFINITY;
+    if (leftStart !== rightStart) return leftStart - rightStart;
+    return (left[1] ?? Number.POSITIVE_INFINITY) - (right[1] ?? Number.POSITIVE_INFINITY);
+  });
+  const merged: Array<[number | null, number | null]> = [];
+  for (const window of windows) {
+    const previous = merged[merged.length - 1];
+    if (!previous) {
+      merged.push(window);
+      continue;
+    }
+    const previousEnd = previous[1];
+    const nextStart = window[0];
+    if (previousEnd !== null && nextStart !== null && nextStart > previousEnd) {
+      merged.push(window);
+      continue;
+    }
+    previous[1] = previousEnd === null || window[1] === null
+      ? null
+      : Math.max(previousEnd, window[1]);
+  }
+  if (merged.length === 1 && merged[0]![0] === null && merged[0]![1] === null) return null;
+  return merged;
+}
+
 /** Ensure a wire/source grant comparison is independent of caller array and object insertion order. */
 export function accessGrantKey<
   Permission extends string,
@@ -225,7 +266,7 @@ export function accessGrantKey<
       scope.push([dimension, "subject", constraint.attribute]);
     }
   }
-  return JSON.stringify([grant.permission, scope]);
+  return JSON.stringify([grant.permission, scope, accessValidityKey(grant.validity)]);
 }
 
 /** Combine additive bundles without changing scoped grant meaning or retaining duplicate entries. */
@@ -313,43 +354,74 @@ function parseGrant<
     throw new Error("grant.permission is not an assignable catalog permission");
   }
   const permission = value.permission;
-  if (value.scope === undefined) return { permission };
-  const scopeInput = record(value.scope, "grant.scope");
-  const supported = access.catalog.supportedScopeDimensions(permission);
-  const scope: Partial<Record<Dimension, AccessScopeSource<Attribute>>> = {};
-  for (const rawDimension of Object.keys(scopeInput)) {
-    if (!supported.has(rawDimension as Dimension)) {
-      throw new Error(`grant.scope uses unsupported dimension ${rawDimension}`);
-    }
-    const dimension = rawDimension as Dimension;
-    const rawConstraint = record(scopeInput[rawDimension], `grant.scope.${rawDimension}`);
-    if (rawConstraint.kind === "ids") {
-      if (!Array.isArray(rawConstraint.ids)) {
-        throw new Error(`grant.scope.${rawDimension}.ids must be an array`);
+  let scope: Partial<Record<Dimension, AccessScopeSource<Attribute>>> | undefined;
+  if (value.scope !== undefined) {
+    const scopeInput = record(value.scope, "grant.scope");
+    const supported = access.catalog.supportedScopeDimensions(permission);
+    scope = {};
+    for (const rawDimension of Object.keys(scopeInput)) {
+      if (!supported.has(rawDimension as Dimension)) {
+        throw new Error(`grant.scope uses unsupported dimension ${rawDimension}`);
       }
-      const ids: string[] = [];
-      for (const id of rawConstraint.ids) {
-        if (typeof id !== "string" || !id) {
-          throw new Error(`grant.scope.${rawDimension}.ids must contain non-empty strings`);
+      const dimension = rawDimension as Dimension;
+      const rawConstraint = record(scopeInput[rawDimension], `grant.scope.${rawDimension}`);
+      if (rawConstraint.kind === "ids") {
+        if (!Array.isArray(rawConstraint.ids)) {
+          throw new Error(`grant.scope.${rawDimension}.ids must be an array`);
         }
-        ids.push(id);
+        const ids: string[] = [];
+        for (const id of rawConstraint.ids) {
+          if (typeof id !== "string" || !id) {
+            throw new Error(`grant.scope.${rawDimension}.ids must contain non-empty strings`);
+          }
+          ids.push(id);
+        }
+        scope[dimension] = { kind: "ids", ids };
+        continue;
       }
-      scope[dimension] = { kind: "ids", ids };
-      continue;
+      if (
+        rawConstraint.kind !== "subject" ||
+        typeof rawConstraint.attribute !== "string" ||
+        !rawConstraint.attribute
+      ) {
+        throw new Error(`grant.scope.${rawDimension} must be ids or subject scope`);
+      }
+      scope[dimension] = {
+        kind: "subject",
+        attribute: rawConstraint.attribute as Attribute,
+      };
     }
-    if (
-      rawConstraint.kind !== "subject" ||
-      typeof rawConstraint.attribute !== "string" ||
-      !rawConstraint.attribute
-    ) {
-      throw new Error(`grant.scope.${rawDimension} must be ids or subject scope`);
-    }
-    scope[dimension] = {
-      kind: "subject",
-      attribute: rawConstraint.attribute as Attribute,
-    };
   }
-  return { permission, scope };
+
+  let validity: AccessValidity | readonly AccessValidity[] | undefined;
+  if (value.validity !== undefined) {
+    const rawWindows = Array.isArray(value.validity) ? value.validity : [value.validity];
+    const windows: AccessValidity[] = [];
+    for (const rawWindow of rawWindows) {
+      const window = record(rawWindow, "grant.validity");
+      const start = window.startsAtEpochMs;
+      const end = window.endsAtEpochMs;
+      if (start !== undefined && !Number.isSafeInteger(start)) {
+        throw new Error("grant.validity.startsAtEpochMs must be a safe integer");
+      }
+      if (end !== undefined && !Number.isSafeInteger(end)) {
+        throw new Error("grant.validity.endsAtEpochMs must be a safe integer");
+      }
+      if (start !== undefined && end !== undefined && Number(start) > Number(end)) {
+        throw new Error("grant.validity start must not be after end");
+      }
+      windows.push({
+        ...(start === undefined ? {} : { startsAtEpochMs: Number(start) }),
+        ...(end === undefined ? {} : { endsAtEpochMs: Number(end) }),
+      });
+    }
+    validity = Array.isArray(value.validity) ? windows : windows[0]!;
+  }
+  return {
+    permission,
+    ...(scope === undefined ? {} : { scope }),
+    ...(validity === undefined ? {} : { validity }),
+  };
 }
 
 /** Parse one untrusted control read request before it reaches application storage. */
@@ -527,7 +599,7 @@ export function createAccessGrantControlClient<
   ExtraMutation = never,
   State extends AccessGrantControlState<Permission, Dimension, Attribute> = AccessGrantControlState<Permission, Dimension, Attribute>,
 >(options: {
-  /** BYO wire adapter; Parse Cloud, REST, RPC, IPC, and tests all implement the same tiny method. */
+  /** BYO wire adapter; REST, RPC, IPC, and tests all implement the same tiny method. */
   transport: AccessGrantControlTransport<Permission, Dimension, Attribute, ExtraMutation, State>;
 }): AccessGrantControlClient<Permission, Dimension, Attribute, ExtraMutation, State> {
   /** Send one already-normalized control request through the application transport. */

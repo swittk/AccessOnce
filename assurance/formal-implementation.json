@@ -25,6 +25,28 @@
       ],
       "sourceSha256": "13a34a743aa3f76bc9c2fd19b425221637815ff42c072639796b6ea194d39ac5",
       "modelSha256": "a54fce749f705264440726e7f0e7ec31db3b5202aa367f9b918c3d58d5292b47"
+    },
+    {
+      "source": "src/evaluation.ts",
+      "sourceDeclarations": [
+        "AccessEvaluationFactory",
+        "TemporalRuntimeState",
+        "createAccessEvaluationFactory"
+      ],
+      "model": "formal/TemporalEvaluation.tla",
+      "modelActions": [
+        "ChooseTime",
+        "Advance",
+        "Rewind",
+        "Finish"
+      ],
+      "modelInvariants": [
+        "CursorWithinBounds",
+        "ActiveMatchesCursor",
+        "IdleIntervalContainsTime"
+      ],
+      "sourceSha256": "2bc391029d747f8e7ce74e40f8ab7c16bce9deca5afb73b05ce17356f859a6cf",
+      "modelSha256": "9f52b1300814ac0e6bf96bd4740dc0b0f2511f336dcfd41f0e2b59db90f72526"
     }
   ]
 }

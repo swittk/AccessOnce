@@ -306,6 +306,47 @@ it("creates a scoped editor diff, ignores reordered ids, and composes additive b
   expect(oldGrants).toEqual([first, grant("record.write", "a")]);
 });
 
+
+it("round-trips temporal grant edits and compares reordered validity windows semantically", async () => {
+  const first: Grant = {
+    permission: "record.read",
+    validity: [
+      { startsAtEpochMs: 10, endsAtEpochMs: 20 },
+      { startsAtEpochMs: 30, endsAtEpochMs: 40 },
+    ],
+  };
+  const reordered: Grant = {
+    permission: "record.read",
+    validity: [
+      { startsAtEpochMs: 30, endsAtEpochMs: 40 },
+      { startsAtEpochMs: 10, endsAtEpochMs: 20 },
+    ],
+  };
+  expect(createAccessGrantChanges([first], [reordered])).toEqual([]);
+
+  const fixture = createFixture([]);
+  await fixture.control.grants.mutate({
+    subjectId: "alice",
+    expectedRevision: "1",
+    mutations: [{ operation: "add", grants: [first] }],
+  });
+  expect(fixture.state().source.source.grants).toEqual([first]);
+  expect(access.evaluateAt(fixture.state().snapshot, 15).can("record.read")).toBe(true);
+  expect(access.evaluateAt(fixture.state().snapshot, 25).can("record.read")).toBe(false);
+
+  await expect(fixture.control.grants.mutate({
+    subjectId: "alice",
+    expectedRevision: "2",
+    mutations: [{
+      operation: "add",
+      grants: [{
+        permission: "record.read",
+        validity: { startsAtEpochMs: 50, endsAtEpochMs: 49 },
+      }],
+    }],
+  })).rejects.toThrow(/start must not be after end/);
+});
+
 it("preserves order when mixed batches remove, replace, and add duplicate grants", () => {
   expect(applyAccessGrantMutations([grant("record.read")], [
     { operation: "add", grants: [grant("record.write"), grant("record.write")] },

@@ -70,4 +70,5 @@ function requireUnsafePublicationRejected() {
 }
 
 runModel("Publication", "Publication.cfg");
+runModel("TemporalEvaluation", "TemporalEvaluation.cfg");
 requireUnsafePublicationRejected();

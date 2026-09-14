@@ -19,7 +19,7 @@ export type CompileAccessSourcesArgs<Permission extends string, Dimension extend
 
 /** A compiled grant and the exact sources that contributed that permission/scope clause. */
 export type AccessGrantContribution<Leaf extends string, Dimension extends string, Attribute extends string, SourceId extends string = string> = {
-  /** Frozen concrete grant; also present in the compiled snapshot. */
+  /** Frozen concrete grant; it may be timeless or referenced by the compiled temporal timeline. */
   grant: CompiledAccessGrant<Leaf, Dimension, Attribute>;
   /** Source identities contributing this exact clause, including through parents or implications. */
   sourceIds: readonly SourceId[];
@@ -29,11 +29,11 @@ export type AccessGrantContribution<Leaf extends string, Dimension extends strin
 export type CompiledAccessSources<Leaf extends string, Dimension extends string, Attribute extends string, SourceId extends string = string> = {
   /** The same authority as compiling the concatenated input grants. */
   snapshot: EffectiveAccessSnapshot<Leaf, Dimension, Attribute>;
-  /** Read-only origins, ordered like the snapshot grants and kept outside the persisted snapshot. */
+  /** Read-only origins for unique compiled clauses, kept outside the persisted snapshot. */
   contributions: readonly AccessGrantContribution<Leaf, Dimension, Attribute, SourceId>[];
 };
 
-/** Compile each bundle once and union complete scope clauses without inventing cross-source scope combinations. */
+/** Compile each bundle for provenance, then compile the complete union once so temporal windows merge correctly. */
 export function compileAccessSources<Permission extends string, Leaf extends Permission, Dimension extends string, Attribute extends string, SourceId extends string>(
   catalog: AccessCatalog<Permission, Leaf, Dimension>,
   args: CompileAccessSourcesArgs<Permission, Dimension, Attribute, SourceId>,
@@ -41,10 +41,11 @@ export function compileAccessSources<Permission extends string, Leaf extends Per
   /** Exact compiled clause -> contributing source ids. Repeated source entries do not repeat origin labels. */
   const origins = new Map<string, Set<SourceId>>();
   const grantsByKey = new Map<string, CompiledAccessGrant<Leaf, Dimension, Attribute>>();
+  const combined: AccessGrant<Permission, Dimension, Attribute>[] = [];
   for (const source of args.sources) {
+    for (const grant of source.grants) combined.push(grant);
     const compiled = compileAccessSnapshot(catalog, { grants: source.grants });
     for (const grant of compiled.grants) {
-      // The compiler already sorted/uniqued every constraint. Whole clauses, not individual dimensions, are unioned.
       const key = JSON.stringify([grant.permission, grant.constraints]);
       let sourceIds = origins.get(key);
       if (!sourceIds) {
@@ -54,27 +55,33 @@ export function compileAccessSources<Permission extends string, Leaf extends Per
       }
       sourceIds.add(source.id);
     }
+    if (compiled.temporal) {
+      for (const grant of compiled.temporal.grants) {
+        const key = JSON.stringify([grant.permission, grant.constraints]);
+        let sourceIds = origins.get(key);
+        if (!sourceIds) {
+          sourceIds = new Set<SourceId>();
+          origins.set(key, sourceIds);
+          grantsByKey.set(key, grant);
+        }
+        sourceIds.add(source.id);
+      }
+    }
   }
 
-  const keys = [...grantsByKey.keys()].sort((left, right) =>
-    left < right ? -1 : left > right ? 1 : 0,
-  );
-  const grants: CompiledAccessGrant<Leaf, Dimension, Attribute>[] = [];
-  const contributions: AccessGrantContribution<Leaf, Dimension, Attribute, SourceId>[] = [];
-  for (const key of keys) {
-    const grant = grantsByKey.get(key)!;
-    grants.push(grant);
-    contributions.push(Object.freeze({ grant, sourceIds: Object.freeze([...origins.get(key)!]) }));
-  }
-  // Reuse the compiler's metadata/subject rules without expanding the union a second time.
-  const metadata = compileAccessSnapshot<Permission, Leaf, Dimension, Attribute>(catalog, {
-    grants: [],
+  const snapshot = compileAccessSnapshot<Permission, Leaf, Dimension, Attribute>(catalog, {
+    grants: combined,
     ...(args.subject ? { subject: args.subject } : {}),
     ...(args.sourceRevision !== undefined ? { sourceRevision: args.sourceRevision } : {}),
   });
-  const snapshot: EffectiveAccessSnapshot<Leaf, Dimension, Attribute> = Object.freeze({
-    ...metadata,
-    grants: Object.freeze(grants),
-  });
+  const keys = [...grantsByKey.keys()];
+  keys.sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+  const contributions: AccessGrantContribution<Leaf, Dimension, Attribute, SourceId>[] = [];
+  for (const key of keys) {
+    contributions.push(Object.freeze({
+      grant: grantsByKey.get(key)!,
+      sourceIds: Object.freeze([...origins.get(key)!]),
+    }));
+  }
   return Object.freeze({ snapshot, contributions: Object.freeze(contributions) });
 }

@@ -4,6 +4,7 @@ export * from "./catalog.js";
 export * from "./client.js";
 export * from "./compiler.js";
 export * from "./control-wire.js";
+export * from "./evaluation.js";
 export * from "./publication.js";
 export * from "./relationship.js";
 export * from "./relationship-control.js";

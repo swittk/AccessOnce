@@ -57,7 +57,31 @@ access.can(snapshot, "record.read", { location: "site-a" }); // true
 access.can(snapshot, "record.read", { location: "site-b" }); // false
 ```
 
-That is the common case. Storage, Parse, SQL, REST, Electron IPC, React state, and relationship graphs are not part of that decision.
+That is the common case. Storage, SQL, REST, IPC, React state, and relationship graphs are not part of that decision.
+
+## Temporal grants without a timed hot path
+
+A grant may be timeless or active in one or several half-open windows. `startsAtEpochMs` is inclusive and `endsAtEpochMs` is exclusive:
+
+```ts
+const snapshot = access.compile({
+  grants: [{
+    permission: "record.read",
+    scope: { location: { kind: "ids", ids: ["site-a"] } },
+    validity: [
+      { startsAtEpochMs: january1, endsAtEpochMs: february1 },
+      { startsAtEpochMs: march1 },
+    ],
+  }],
+});
+
+const evaluation = access.evaluateAt(snapshot, requestTime);
+evaluation.can("record.read", { location: "site-a" });
+```
+
+Compilation stores timeless grants separately from a compact unique temporal-grant table and transition deltas. `evaluateAt()` keeps a per-snapshot transition cursor in a `WeakMap`. Calls inside the same interval reuse the already-materialized evaluator; crossing a boundary applies only the crossed deltas and materializes the next effective state once. Historical/test callers may move backwards and the deltas are reversed.
+
+`access.can(snapshot, ...)` and `access.evaluate(snapshot)` remain deliberately timeless: they never read a clock, inspect the timeline, or pay a temporal branch. Use `evaluateAt()` whenever timed grants should contribute authority. The returned evaluation exposes `validFromEpochMs` / `validUntilEpochMs` for callers that want to cache one request/session evaluation explicitly. No scheduler is required for snapshot correctness.
 
 ## Query and UI projections
 
@@ -84,7 +108,7 @@ For database adapters, `queryPlan()` returns correlated OR-of-AND clauses rather
 const plan = access.queryPlan(snapshot, "record.read");
 ```
 
-The database adapter decides how that becomes Parse, SQL, Prisma, MongoDB, or something else.
+The database adapter decides how that becomes SQL, a query builder, a document store, or something else.
 
 ## Custom permission graphs
 
@@ -96,7 +120,8 @@ If you are new to AccessOnce, the source has a deliberately boring reading order
 
 - `src/access.ts` — start here; this is the small application-facing facade.
 - `src/catalog.ts` — validates permission definitions once at startup.
-- `src/compiler.ts` — turns editable grants into immutable actor snapshots.
+- `src/compiler.ts` — turns editable grants into immutable actor snapshots and compact temporal transitions.
+- `src/evaluation.ts` — binds snapshots and advances/rewinds temporal transition cursors outside the timeless hot evaluator.
 - `src/sources.ts` — additive role/profile/direct-source composition plus cold-path provenance.
 - `src/runtime.ts` — the performance-critical in-memory evaluator and projection logic.
 - `src/client.ts` — frontend/session snapshot lifecycle over any transport.
@@ -177,7 +202,7 @@ Shared-profile fan-out, occupational-role migration, and infrastructure gateway 
 
 ### Frontend authority editing
 
-The recommended admin/editor wire is `@accessonce/core/control`. It is transport-neutral like the snapshot client: Parse Cloud, REST, RPC, IPC, or another application transport only has to carry the JSON DTO. The backend remains authoritative and validates every permission/scope against the catalog before mutating durable source rows.
+The recommended admin/editor wire is `@accessonce/core/control`. It is transport-neutral like the snapshot client: REST, RPC, IPC, or another application transport only has to carry the JSON DTO. The backend remains authoritative and validates every permission/scope against the catalog before mutating durable source rows.
 
 Direct grants have a built-in batch protocol:
 
@@ -230,7 +255,7 @@ High-cardinality explicit object ACLs use `AccessRelationshipAdapter` for checks
 
 ### 2. Effective-snapshot client transport
 
-`@accessonce/core/client` owns frontend/bootstrap lifecycle without choosing REST, Parse, RPC, IPC, or push technology:
+`@accessonce/core/client` owns frontend/bootstrap lifecycle without choosing REST, RPC, IPC, or push technology:
 
 ```ts
 const accessClient = createAccessSnapshotClient({
@@ -295,7 +320,7 @@ The AuthZEN adapter is deliberately a subpath: importing `@accessonce/core` neve
 
 ## What the core deliberately does not own
 
-AccessOnce does not know Parse, Postgres, MongoDB, Prisma, REST, WebSocket, Electron IPC, OpenFGA, SpiceDB, or an application's occupational roles. Those are adapters or application policy.
+AccessOnce does not know a database, ORM, application transport, relationship graph, or an application's occupational roles. Those are adapters or application policy.
 
 High-cardinality ACLs also do **not** belong in actor snapshots. A confidential record may require `reader`, `group-member`, a named user, a group, or a role relationship through `AccessRelationshipAdapter`. Normal records still use only the cheap compiled check and perform no adapter I/O. `authorizeAccessMany` filters locally first and uses `checkMany` when a remote relationship adapter provides it, so one page does not require one wire round-trip per record.
 

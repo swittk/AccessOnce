@@ -16,6 +16,10 @@ import {
   type CompileAccessArgs,
 } from "./compiler.js";
 import {
+  createAccessEvaluationFactory,
+  type AccessEvaluationFactory,
+} from "./evaluation.js";
+import {
   createAdaptedAccessEvaluator,
   createAccessEvaluator,
   type AccessEvaluator,
@@ -33,7 +37,7 @@ export type Access<
   EffectiveAccessSnapshot<Leaf, Dimension, Attribute>,
   Leaf,
   Dimension
-> & {
+> & AccessEvaluationFactory<Leaf, Dimension, Attribute> & {
   /** Validated immutable catalog used by compilation and runtime generation checks. */
   catalog: AccessCatalog<Permission, Leaf, Dimension>;
   /** Compile editable source grants into one immutable runtime snapshot. */
@@ -62,6 +66,7 @@ function createAccessFromCatalog<
   catalog: AccessCatalog<Permission, Leaf, Dimension>,
 ): Access<Permission, Leaf, Dimension, Attribute> {
   const evaluator = createAccessEvaluator<Permission, Leaf, Dimension, Attribute>(catalog);
+  const evaluations = createAccessEvaluationFactory(evaluator);
   return Object.freeze({
     catalog,
     compile(args: CompileAccessArgs<Permission, Dimension, Attribute>) {
@@ -91,6 +96,7 @@ function createAccessFromCatalog<
       >(catalog, adapter);
     },
     ...evaluator,
+    ...evaluations,
   });
 }
 

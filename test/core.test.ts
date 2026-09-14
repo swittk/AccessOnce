@@ -336,4 +336,158 @@ describe("AccessOnce core", () => {
     const access = createAccessEvaluator<Permission, Leaf, Dimension, Attribute>(catalog);
     expect(access.can(snapshot, "record.read")).toBe(false);
   });
+
+  it("compiles temporal grants into compact transitions while keeping timeless can() unchanged", () => {
+    const access = createAccess<Permission, Leaf, Dimension, Attribute>({
+      catalogId: "temporal-test",
+      catalogVersion: 1,
+      compilerVersion: 1,
+      permissions: ["*", "record", "record.read", "record.write", "billing.read"],
+      leaves: ["record.read", "record.write", "billing.read"],
+      scopeDimensions: {
+        "record.read": ["location", "resource"],
+        "record.write": ["location", "resource"],
+        "billing.read": ["location", "assignee"],
+      },
+      includes(granted, requested) {
+        return granted === "*" || granted === requested ||
+          (granted === "record" && requested.startsWith("record."));
+      },
+    });
+    const snapshot = access.compile({
+      grants: [{
+        permission: "record.read",
+        scope: { location: { kind: "ids", ids: ["site-a"] } },
+        validity: [
+          { startsAtEpochMs: 10, endsAtEpochMs: 20 },
+          { startsAtEpochMs: 30 },
+        ],
+      }],
+    });
+
+    expect(snapshot.grants).toEqual([]);
+    expect(snapshot.temporal?.grants).toHaveLength(1);
+    expect(snapshot.temporal?.grantPositions).toEqual([0]);
+    expect(Object.isFrozen(snapshot.temporal)).toBe(true);
+    expect(Object.isFrozen(snapshot.temporal?.grants)).toBe(true);
+    expect(Object.isFrozen(snapshot.temporal?.transitions)).toBe(true);
+    expect(Object.isFrozen(snapshot.temporal?.transitions[0])).toBe(true);
+    expect(snapshot.temporal?.transitions).toEqual([
+      { atEpochMs: 10, addGrantIndexes: [0], removeGrantIndexes: [] },
+      { atEpochMs: 20, addGrantIndexes: [], removeGrantIndexes: [0] },
+      { atEpochMs: 30, addGrantIndexes: [0], removeGrantIndexes: [] },
+    ]);
+    expect(access.can(snapshot, "record.read", { location: "site-a" })).toBe(false);
+    expect(access.evaluate(snapshot).can("record.read", { location: "site-a" })).toBe(false);
+
+    const before = access.evaluateAt(snapshot, 9);
+    expect(before.can("record.read", { location: "site-a" })).toBe(false);
+    expect(before.validFromEpochMs).toBeUndefined();
+    expect(before.validUntilEpochMs).toBe(10);
+
+    const first = access.evaluateAt(snapshot, 10);
+    expect(first.can("record.read", { location: "site-a" })).toBe(true);
+    expect(first.validFromEpochMs).toBe(10);
+    expect(first.validUntilEpochMs).toBe(20);
+    expect(access.evaluateAt(snapshot, 19)).toBe(first);
+
+    expect(access.evaluateAt(snapshot, 20).can("record.read", { location: "site-a" })).toBe(false);
+    const indefinite = access.evaluateAt(snapshot, 30);
+    expect(indefinite.can("record.read", { location: "site-a" })).toBe(true);
+    expect(indefinite.validFromEpochMs).toBe(30);
+    expect(indefinite.validUntilEpochMs).toBeUndefined();
+
+    // Historical callers reverse only crossed deltas and recover the exact earlier state.
+    expect(access.evaluateAt(snapshot, 15).can("record.read", { location: "site-a" })).toBe(true);
+    expect(access.evaluateAt(snapshot, 25).can("record.read", { location: "site-a" })).toBe(false);
+  });
+
+  it("merges overlapping temporal contributions and lets timeless authority dominate the same clause", () => {
+    const access = createHierarchicalAccess({
+      catalogId: "temporal-union-test",
+      catalogVersion: 1,
+      compilerVersion: 1,
+      permissions: ["record.read"],
+      leaves: ["record.read"],
+      scopeDimensions: { "record.read": ["location"] },
+    });
+    const temporal = access.compile({ grants: [
+      { permission: "record.read", validity: { startsAtEpochMs: 10, endsAtEpochMs: 20 } },
+      { permission: "record.read", validity: { startsAtEpochMs: 15, endsAtEpochMs: 30 } },
+    ] });
+    expect(temporal.temporal?.grants).toHaveLength(1);
+    expect(temporal.temporal?.transitions).toEqual([
+      { atEpochMs: 10, addGrantIndexes: [0], removeGrantIndexes: [] },
+      { atEpochMs: 30, addGrantIndexes: [], removeGrantIndexes: [0] },
+    ]);
+    expect(access.evaluateAt(temporal, 25).can("record.read")).toBe(true);
+
+    const timeless = access.compile({ grants: [
+      { permission: "record.read" },
+      { permission: "record.read", validity: { startsAtEpochMs: 10, endsAtEpochMs: 20 } },
+    ] });
+    expect(timeless.grants).toHaveLength(1);
+    expect(timeless.temporal).toBeUndefined();
+    expect(access.can(timeless, "record.read")).toBe(true);
+  });
+
+  it("supports open-ended windows and preserves temporal validity through parents and implications", () => {
+    const access = createAccess<Permission, Leaf, Dimension, Attribute>({
+      catalogId: "temporal-parent-test",
+      catalogVersion: 1,
+      compilerVersion: 1,
+      permissions: ["*", "record", "record.read", "record.write", "billing.read"],
+      leaves: ["record.read", "record.write", "billing.read"],
+      scopeDimensions: {
+        "record.read": ["location"],
+        "record.write": ["location"],
+        "billing.read": ["location"],
+      },
+      includes(granted, requested) {
+        return granted === "*" || granted === requested ||
+          (granted === "record" && requested.startsWith("record."));
+      },
+      implies: { "record.write": ["billing.read"] },
+    });
+    const snapshot = access.compile({ grants: [{
+      permission: "record",
+      scope: { location: { kind: "ids", ids: ["site-a"] } },
+      validity: { endsAtEpochMs: 50 },
+    }] });
+
+    expect(snapshot.temporal?.initialGrantIndexes).toEqual([0, 1, 2]);
+    const active = access.evaluateAt(snapshot, 49);
+    expect(active.can("record.read", { location: "site-a" })).toBe(true);
+    expect(active.can("record.write", { location: "site-a" })).toBe(true);
+    expect(active.can("billing.read", { location: "site-a" })).toBe(true);
+    const expired = access.evaluateAt(snapshot, 50);
+    expect(expired.can("record.read", { location: "site-a" })).toBe(false);
+    expect(expired.can("record.write", { location: "site-a" })).toBe(false);
+    expect(expired.can("billing.read", { location: "site-a" })).toBe(false);
+  });
+
+  it("fails closed for malformed temporal snapshot indexes", () => {
+    const access = createHierarchicalAccess({
+      catalogId: "temporal-malformed-test",
+      catalogVersion: 1,
+      compilerVersion: 1,
+      permissions: ["record.read"],
+      leaves: ["record.read"],
+      scopeDimensions: { "record.read": [] },
+    });
+    const snapshot = access.compile({ grants: [{
+      permission: "record.read",
+      validity: { endsAtEpochMs: 10 },
+    }] });
+    const malformed = {
+      ...snapshot,
+      temporal: {
+        grants: snapshot.temporal!.grants,
+        initialGrantIndexes: [99],
+        transitions: snapshot.temporal!.transitions,
+      },
+    };
+    expect(access.evaluateAt(malformed, 0).can("record.read")).toBe(false);
+  });
+
 });

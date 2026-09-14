@@ -47,4 +47,23 @@ describe("additive source composition", () => {
     expect(access.can(result.snapshot, "record.read", { location: "elsewhere", resource: "other" })).toBe(true);
     expect(result.contributions).toHaveLength(2);
   });
+
+  it("unions temporal windows across sources without inflating provenance into the snapshot", () => {
+    const result = access.compileSources({ sources: [
+      { id: "temporary-a", grants: [{ permission: "record.read", validity: { startsAtEpochMs: 10, endsAtEpochMs: 20 } }] },
+      { id: "temporary-b", grants: [{ permission: "record.read", validity: { startsAtEpochMs: 15, endsAtEpochMs: 30 } }] },
+    ] });
+    const flat = access.compile({ grants: [
+      { permission: "record.read", validity: { startsAtEpochMs: 10, endsAtEpochMs: 20 } },
+      { permission: "record.read", validity: { startsAtEpochMs: 15, endsAtEpochMs: 30 } },
+    ] });
+    expect(result.snapshot).toEqual(flat);
+    expect(result.snapshot.temporal?.transitions).toEqual([
+      { atEpochMs: 10, addGrantIndexes: [0], removeGrantIndexes: [] },
+      { atEpochMs: 30, addGrantIndexes: [], removeGrantIndexes: [0] },
+    ]);
+    expect(result.contributions).toHaveLength(1);
+    expect(result.contributions[0]?.sourceIds).toEqual(["temporary-a", "temporary-b"]);
+  });
+
 });
