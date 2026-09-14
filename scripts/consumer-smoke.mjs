@@ -59,6 +59,23 @@ function checkCore(module, label) {
     throw new Error(`${label} build lost source provenance`);
   }
 
+  const requestPolicy = model.requestPolicy({
+    policyId: "consumer-request",
+    ceilings: [{ permission: "read", scope: { location: { kind: "ids", ids: ["a"] } } }],
+    approval: { kind: "automatic" },
+  });
+  if (!requestPolicy.canRequest({
+    grant: { permission: "read", scope: { location: { kind: "ids", ids: ["a"] } } },
+  })) {
+    throw new Error(`${label} build failed request-policy ceiling evaluation`);
+  }
+  if (typeof module.createAccessRequestService !== "function") {
+    throw new Error(`${label} build is missing access request service`);
+  }
+  if (typeof module.createAccessRequestControlClient !== "function") {
+    throw new Error(`${label} build is missing access request control client`);
+  }
+
   const temporalSnapshot = model.compile({
     grants: [{
       permission: "read",
@@ -137,4 +154,4 @@ if (typeof esmClient.createAccessSnapshotClient !== "function") {
 if (typeof cjsClient.createAccessSnapshotClient !== "function") {
   throw new Error("CJS client subpath is missing createAccessSnapshotClient");
 }
-console.log("consumer-smoke: ESM, CJS, temporal evaluation, client, control, relationship ACL, React, and AuthZEN surfaces ok");
+console.log("consumer-smoke: ESM, CJS, temporal evaluation, requests, client, control, relationship ACL, React, and AuthZEN surfaces ok");

@@ -126,6 +126,7 @@ If you are new to AccessOnce, the source has a deliberately boring reading order
 - `src/runtime.ts` — the performance-critical in-memory evaluator and projection logic.
 - `src/client.ts` — frontend/session snapshot lifecycle over any transport.
 - `src/control-wire.ts` — reusable optimistic-concurrency read/mutation wire for admin editors.
+- `src/request.ts`, `request-control.ts` — cold request ceilings, durable approval issuance, and transport-neutral request controls.
 - `src/control.ts`, `adapters.ts`, `relationship.ts`, `publication.ts` — optional backend/query/object-ACL/durability boundaries.
 - `src/react.ts` and `src/authzen/` — optional React and standard remote-decision integrations.
 
@@ -252,6 +253,69 @@ await grants.removePermissions({
 Applications may extend the generic `AccessControlMutationRequest<Mutation>` / `AccessControlMutationTransport<Mutation, Response>` envelope with app-specific mutations such as profile IDs or tenant memberships. AccessOnce deliberately does not invent a universal `profile` or `role` database schema. The built-in direct-grant service can map its grant list into any larger application source through `AccessGrantSourceAdapter`.
 
 High-cardinality explicit object ACLs use `AccessRelationshipAdapter` for checks and the optional `AccessRelationshipMutationAdapter` for batched `add`/`remove` mutations. They do not inflate actor snapshots.
+
+### Access requests and approval
+
+Requestability is a **cold control-plane concern**, not a fallback inside `can()`. The application decides which request policies apply and which buttons/catalog entries to advertise. AccessOnce only proves that the exact requested `AccessGrant` is inside an application-selected authority ceiling.
+
+```ts
+const temporaryRecords = access.requestPolicy({
+  policyId: "temporary-record-read",
+  ceilings: [
+    {
+      permission: "record.read",
+      scope: { location: { kind: "ids", ids: ["site-a", "site-b"] } },
+    },
+  ],
+  approval: { kind: "policy", policyId: "record-access" },
+  validity: {
+    allowUnbounded: false,
+    maximumWindows: 1,
+    maximumDurationMs: 8 * 60 * 60 * 1000,
+  },
+});
+```
+
+The ceiling is compiled through the same catalog as ordinary authority. Parent assignments and implications therefore have identical meaning in requests and runtime authorization. Correlated scopes stay correlated: a ceiling containing `(site-a AND type-x) OR (site-b AND type-y)` does not silently authorize the cross-product. Subject-relative scopes preserve their semantic attribute identity rather than comparing only today's resolved values.
+
+A durable service adds idempotent submission, current-policy re-check on approval, application-owned routing, optimistic transitions, and recoverable authority issuance:
+
+```ts
+const requests = createAccessRequestService({
+  store: myRequestStore,
+
+  async resolvePolicy({ policyId, requesterId, subjectId }) {
+    if (!applicationAllowsPolicy(requesterId, subjectId, policyId)) return undefined;
+    return { policy: temporaryRecords, subject: await loadSubjectAttributes(subjectId) };
+  },
+
+  async resolveApprovalRoute({ requesterId, subjectId }) {
+    return resolveCurrentApprovalQueue(requesterId, subjectId); // undefined => unavailable
+  },
+
+  async authorizeTransition({ actorId, action, request }) {
+    return actorMayTransitionRequest(actorId, action, request);
+  },
+
+  async issue({ issuanceKey, request }) {
+    // Must be durable + idempotent by issuanceKey and must publish this exact grant
+    // through the application's ordinary authority source/materialization path.
+    await publishRequestedGrant({
+      issuanceKey,
+      subjectId: request.subjectId,
+      grant: request.grant,
+    });
+  },
+});
+```
+
+`pending -> issuing -> approved` contains one deliberately internal durability step. `issuing` means approval has been durably claimed but the exact ordinary authority publication may need recovery. The service writes `approved` **only after** the idempotent issuer succeeds. A crash after authority publication leaves `issuing`; `recover(requestId)` retries the same stable `access-request:<requestId>` issuance key and then commits `approved`. Deny/cancel/expire are terminal from `pending`; conflicting terminal rewrites fail while same-terminal retries are idempotent.
+
+Automatic policies use the same protocol: submission first records `pending`, then re-checks the current policy under the request's serialization boundary before claiming `issuing`. They are never falsely persisted as `approved` before authority exists. Manual policies must resolve an application route before request creation, so a request does not silently fall into an unowned queue. The requester does not choose an approver unless the application deliberately builds that behavior.
+
+`createAccessRequestControlClient()` supplies only `submit`, `read`, `transition`, `approve`, `deny`, and `cancel`. It intentionally has no global list/catalog method: queue indexes and the decision to advertise a request are application concerns. Requester/approver identity should come from the authenticated endpoint context rather than being trusted from the JSON wire.
+
+The current request engine requests actor `AccessGrant` authority only. It deliberately does **not** turn object IDs into actor grants. High-cardinality object-specific requests belong with the relationship/ACL plane and should be implemented as a relationship request workflow when a product actually needs them. Likewise, a request endpoint must not become an oracle for otherwise hidden object existence.
 
 ### 2. Effective-snapshot client transport
 

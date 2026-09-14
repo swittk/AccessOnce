@@ -8,6 +8,8 @@ export * from "./evaluation.js";
 export * from "./publication.js";
 export * from "./relationship.js";
 export * from "./relationship-control.js";
+export * from "./request.js";
+export * from "./request-control.js";
 export * from "./runtime.js";
 export * from "./types.js";
 export * from "./sources.js";

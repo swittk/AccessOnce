@@ -339,8 +339,14 @@ function record(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+/** Bounds for decoding one untrusted grant independently of a mutation batch. */
+export type AccessGrantDecodeOptions = {
+  /** Maximum validity windows accepted on one grant; omitted leaves transport size limits in charge. */
+  maximumValidityWindows?: number;
+};
+
 /** Parse one untrusted grant against the application catalog before it can reach the durable source. */
-function parseGrant<
+export function parseAccessGrant<
   Permission extends string,
   Leaf extends Permission,
   Dimension extends string,
@@ -348,6 +354,7 @@ function parseGrant<
 >(
   access: Access<Permission, Leaf, Dimension, Attribute>,
   input: unknown,
+  options: AccessGrantDecodeOptions = {},
 ): AccessGrant<Permission, Dimension, Attribute> {
   const value = record(input, "grant");
   if (typeof value.permission !== "string" || !access.catalog.isPermission(value.permission)) {
@@ -396,6 +403,9 @@ function parseGrant<
   let validity: AccessValidity | readonly AccessValidity[] | undefined;
   if (value.validity !== undefined) {
     const rawWindows = Array.isArray(value.validity) ? value.validity : [value.validity];
+    if (options.maximumValidityWindows !== undefined && rawWindows.length > options.maximumValidityWindows) {
+      throw new Error("grant has too many validity windows");
+    }
     const windows: AccessValidity[] = [];
     for (const rawWindow of rawWindows) {
       const window = record(rawWindow, "grant.validity");
@@ -442,6 +452,7 @@ export function parseAccessGrantMutation<
 >(
   access: Access<Permission, Leaf, Dimension, Attribute>,
   input: unknown,
+  options: AccessGrantDecodeOptions = {},
 ): AccessGrantMutation<Permission, Dimension, Attribute> {
   const mutation = record(input, "mutation");
   if (
@@ -456,7 +467,7 @@ export function parseAccessGrantMutation<
       throw new Error(`${mutation.operation}.grants must not be empty`);
     }
     const grants: AccessGrant<Permission, Dimension, Attribute>[] = [];
-    for (const grant of mutation.grants) grants.push(parseGrant(access, grant));
+    for (const grant of mutation.grants) grants.push(parseAccessGrant(access, grant, options));
     return { operation: mutation.operation, grants };
   }
   if (mutation.operation === "remove-permissions") {
@@ -479,7 +490,7 @@ export function parseAccessGrantMutation<
 }
 
 /** Limits chosen by a transport host, not by the authorization evaluator. */
-export type AccessMutationDecodeOptions = {
+export type AccessMutationDecodeOptions = AccessGrantDecodeOptions & {
   /** Reject larger batches before decoding their entries. Omitted leaves the transport's request-size limit in charge. */
   maximumMutations?: number;
 };
@@ -516,7 +527,7 @@ export function parseAccessGrantMutationRequest<Permission extends string, Leaf 
 ): AccessControlMutationRequest<AccessGrantMutation<Permission, Dimension, Attribute>> {
   return parseAccessControlMutationRequest(
     input,
-    mutation => parseAccessGrantMutation(access, mutation),
+    mutation => parseAccessGrantMutation(access, mutation, options),
     options,
   );
 }

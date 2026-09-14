@@ -47,6 +47,35 @@
       ],
       "sourceSha256": "2bc391029d747f8e7ce74e40f8ab7c16bce9deca5afb73b05ce17356f859a6cf",
       "modelSha256": "9f52b1300814ac0e6bf96bd4740dc0b0f2511f336dcfd41f0e2b59db90f72526"
+    },
+    {
+      "source": "src/request.ts",
+      "sourceDeclarations": [
+        "AccessRequestState",
+        "AccessRequestStore",
+        "AccessRequestIssuance",
+        "createAccessRequestService"
+      ],
+      "model": "formal/RequestApproval.tla",
+      "modelActions": [
+        "SubmitManual",
+        "SubmitAutomatic",
+        "BeginAutomatic",
+        "BeginApproval",
+        "IssueAuthority",
+        "FinishApproval",
+        "Deny",
+        "Cancel",
+        "Expire"
+      ],
+      "modelInvariants": [
+        "ApprovedImpliesIssued",
+        "IssuanceRequiresDurableClaim",
+        "CommittedClaimWasAllowed",
+        "RejectedRequestsNeverIssue"
+      ],
+      "sourceSha256": "fa2c85167fc9b74515060c5eaf45163482e882596cedf70b07c618495cb3377b",
+      "modelSha256": "6b448c5f29395d8fc6d73f7d4335caaa36bbfe52bcf6a61e485f618d20119b83"
     }
   ]
 }
