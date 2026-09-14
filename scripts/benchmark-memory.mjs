@@ -1,6 +1,7 @@
 import v8 from "node:v8";
 import {
   compileAccessSnapshot,
+  createAccessEvaluationFactory,
   createAccessEvaluator,
   defineAccessCatalog,
 } from "../dist/index.js";
@@ -24,6 +25,7 @@ const catalog = defineAccessCatalog({
   },
 });
 const evaluator = createAccessEvaluator(catalog);
+const evaluationFactory = createAccessEvaluationFactory(evaluator);
 const snapshotCount = 6_000;
 
 /** Force several complete collections so retained-object measurements dominate short-lived noise. */
@@ -81,20 +83,51 @@ const indexed = memorySample();
 globalThis.__accessOnceMemoryBenchmarkHold = undefined;
 snapshots = [];
 collectGarbage();
-const released = memorySample();
+const timelessReleased = memorySample();
 
-const temporalSample = compileAccessSnapshot(catalog, {
-  grants: Array.from({ length: 8 }, (_, grantIndex) => ({
-    permission: leaves[grantIndex],
-    scope: { location: { kind: "ids", ids: [`l${grantIndex}`] } },
-    validity: [
-      { startsAtEpochMs: 100 + grantIndex, endsAtEpochMs: 200 + grantIndex },
-      { startsAtEpochMs: 300 + grantIndex, endsAtEpochMs: 400 + grantIndex },
-      { startsAtEpochMs: 500 + grantIndex },
-    ],
-  })),
-});
-const temporalWireBytes = Buffer.byteLength(JSON.stringify(temporalSample));
+/** Populate the temporal caches and return only measurements so local snapshot references die on return. */
+function populateTemporalCache() {
+  const temporalSnapshots = [];
+  const temporalEvaluations = [];
+  for (let snapshotIndex = 0; snapshotIndex < snapshotCount; snapshotIndex += 1) {
+    temporalSnapshots.push(
+      compileAccessSnapshot(catalog, {
+        grants: Array.from({ length: 8 }, (_, grantIndex) => ({
+          permission: leaves[(snapshotIndex + grantIndex) % leaves.length],
+          scope: {
+            location: { kind: "ids", ids: [`l${(snapshotIndex + grantIndex) % 32}`] },
+          },
+          validity: [
+            { startsAtEpochMs: 100 + grantIndex, endsAtEpochMs: 200 + grantIndex },
+            { startsAtEpochMs: 300 + grantIndex, endsAtEpochMs: 400 + grantIndex },
+            { startsAtEpochMs: 500 + grantIndex },
+          ],
+        })),
+      }),
+    );
+  }
+  const temporalWireBytes = Buffer.byteLength(JSON.stringify(temporalSnapshots[0]));
+  for (let index = 0; index < temporalSnapshots.length; index += 1) {
+    temporalEvaluations.push(
+      evaluationFactory.evaluateAt(temporalSnapshots[index], [150, 350, 550][index % 3]),
+    );
+  }
+  globalThis.__accessOnceMemoryBenchmarkHold = {
+    snapshots: temporalSnapshots,
+    evaluations: temporalEvaluations,
+  };
+  collectGarbage();
+  const temporalIndexed = memorySample();
+  globalThis.__accessOnceMemoryBenchmarkHold = undefined;
+  return { temporalWireBytes, temporalIndexed };
+}
+
+// Keep the factory alive while releasing its WeakMap keys; otherwise collecting the factory could hide a strong-key regression.
+globalThis.__accessOnceMemoryBenchmarkFactory = evaluationFactory;
+const { temporalWireBytes, temporalIndexed } = populateTemporalCache();
+collectGarbage();
+const released = memorySample();
+globalThis.__accessOnceMemoryBenchmarkFactory = undefined;
 const wireBytesPerSnapshot = Math.round(sampledWireBytes / 500);
 const compiledHeapBytesPerSnapshot = Math.max(
   0,
@@ -104,8 +137,15 @@ const indexHeapBytesPerSnapshot = Math.max(
   0,
   Math.round((indexed.process.heapUsed - compiled.process.heapUsed) / snapshotCount),
 );
+const temporalRuntimeHeapBytesPerSnapshot = Math.max(
+  0,
+  Math.round(
+    (temporalIndexed.process.heapUsed - timelessReleased.process.heapUsed) / snapshotCount,
+  ),
+);
 const peakRssDeltaBytes =
-  Math.max(compiled.process.rss, indexed.process.rss) - baseline.process.rss;
+  Math.max(compiled.process.rss, indexed.process.rss, temporalIndexed.process.rss) -
+  baseline.process.rss;
 const retainedHeapAfterReleaseBytes = Math.max(
   0,
   released.process.heapUsed - baseline.process.heapUsed,
@@ -114,6 +154,7 @@ const peakMallocedMemoryBytes = Math.max(
   baseline.heap.peak_malloced_memory,
   compiled.heap.peak_malloced_memory,
   indexed.heap.peak_malloced_memory,
+  temporalIndexed.heap.peak_malloced_memory,
 );
 
 const result = {
@@ -123,6 +164,7 @@ const result = {
   temporalWireBytes,
   compiledHeapBytesPerSnapshot,
   indexHeapBytesPerSnapshot,
+  temporalRuntimeHeapBytesPerSnapshot,
   peakRssDeltaBytes,
   peakMallocedMemoryBytes,
   retainedHeapAfterReleaseBytes,
