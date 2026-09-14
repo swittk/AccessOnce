@@ -56,6 +56,10 @@
         "AccessRequestIssuance",
         "createAccessRequestService"
       ],
+      "sourceDependencies": [
+        "accessRequestIssuanceKey",
+        "requestWithState"
+      ],
       "model": "formal/RequestApproval.tla",
       "modelActions": [
         "SubmitManual",
@@ -74,7 +78,7 @@
         "CommittedClaimWasAllowed",
         "RejectedRequestsNeverIssue"
       ],
-      "sourceSha256": "4e5e9190f23eaac700a63df7dbe308f73b944df3ec2d119bec33f073af212bb4",
+      "sourceSha256": "911a74ae3a8cd56129d7be676fbd6eba574f4b39e7ae91ecde063a3849a44efb",
       "modelSha256": "6b448c5f29395d8fc6d73f7d4335caaa36bbfe52bcf6a61e485f618d20119b83"
     }
   ]

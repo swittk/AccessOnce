@@ -94,6 +94,53 @@ describe("relationship ACL adapter", () => {
     expect(results).toEqual(requests.map((_, index) => index % 2 === 0));
   });
 
+  it("stops fallback relationship checks after the first failure and waits for in-flight work", async () => {
+    const snapshot = compileAccessSnapshot(catalog, { grants: [{ permission: "record.read" }] });
+    const evaluator = createAccessEvaluator(catalog);
+    const requests = Array.from({ length: 40 }, (_, index) => ({
+      permission: "record.read" as const,
+      principal: { type: "user", id: `user-${index}` },
+      relationship: {
+        resource: { type: "record", id: `r${index}` },
+        relation: "reader",
+      },
+    }));
+    let startedCount = 0;
+    let markStarted!: () => void;
+    const initialWorkersStarted = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let releaseInFlight!: () => void;
+    const release = new Promise<void>((resolve) => {
+      releaseInFlight = resolve;
+    });
+    const check = vi.fn(async (request: AccessRelationshipCheck) => {
+      startedCount += 1;
+      if (startedCount === 32) markStarted();
+      await initialWorkersStarted;
+      if (request.principal.id === "user-0") throw new Error("relationship check failed");
+      await release;
+      return true;
+    });
+
+    const authorization = authorizeAccessMany(evaluator, snapshot, requests, { check });
+    await initialWorkersStarted;
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(check).toHaveBeenCalledTimes(32);
+
+    let settled = false;
+    void authorization.finally(() => {
+      settled = true;
+    }).catch(() => undefined);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseInFlight();
+    await expect(authorization).rejects.toThrow("relationship check failed");
+    expect(check).toHaveBeenCalledTimes(32);
+  });
+
   it("pushes collection authorization into one backend query operation without per-row fallback", async () => {
     const query = { where: ["site = a"] };
     const constrainQuery = vi.fn(async (request) => {

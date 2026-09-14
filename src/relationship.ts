@@ -520,17 +520,27 @@ export async function authorizeAccessMany<
     // Keep the convenience fallback parallel without allowing one large page to fan out unbounded backend I/O.
     const fallbackResults = new Array<boolean>(relationshipChecks.length);
     let nextIndex = 0;
+    let failed = false;
+    let failure: unknown;
     const worker = async () => {
-      while (nextIndex < relationshipChecks.length) {
+      while (!failed && nextIndex < relationshipChecks.length) {
         const index = nextIndex;
         nextIndex += 1;
-        fallbackResults[index] = await relationshipAdapter.check(relationshipChecks[index]!);
+        try {
+          fallbackResults[index] = await relationshipAdapter.check(relationshipChecks[index]!);
+        } catch (error) {
+          if (!failed) {
+            failed = true;
+            failure = error;
+          }
+        }
       }
     };
     const workers: Promise<void>[] = [];
     const workerCount = Math.min(32, relationshipChecks.length);
     for (let index = 0; index < workerCount; index += 1) workers.push(worker());
     await Promise.all(workers);
+    if (failed) throw failure;
     relationshipResults = fallbackResults;
   }
 

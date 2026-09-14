@@ -76,7 +76,11 @@ for (const binding of manifest.bindings) {
 
   let sourceSha256;
   try {
-    sourceSha256 = sourceDeclarationDigest(source, binding.source, binding.sourceDeclarations);
+    const boundDeclarations = [
+      ...binding.sourceDeclarations,
+      ...(binding.sourceDependencies ?? []),
+    ];
+    sourceSha256 = sourceDeclarationDigest(source, binding.source, boundDeclarations);
   } catch (error) {
     failures.push(error instanceof Error ? error.message : String(error));
     continue;
