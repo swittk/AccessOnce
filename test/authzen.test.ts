@@ -223,6 +223,31 @@ describe("AuthZEN adapter", () => {
     ).toThrow("access_evaluation_endpoint must use https");
   });
 
+  it("preserves malformed advertised optional endpoints so validation fails closed", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          policy_decision_point: "https://pdp.example.com",
+          access_evaluation_endpoint: "https://pdp.example.com/access/v1/evaluation",
+          access_evaluations_endpoint: "",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    const metadata = await discoverAuthZenPdpMetadata("https://pdp.example.com", { fetch: fetchMock });
+    expect(metadata.access_evaluations_endpoint).toBe("");
+    expect(() => createAuthZenHttpClientFromMetadata(metadata)).toThrow(
+      /access_evaluations_endpoint must be an absolute URL/,
+    );
+    expect(() =>
+      createAuthZenHttpClientFromMetadata({
+        policy_decision_point: "https://pdp.example.com",
+        access_evaluation_endpoint: "https://pdp.example.com/access/v1/evaluation",
+        search_subject_endpoint: "",
+      }),
+    ).toThrow(/search_subject_endpoint must be an absolute URL/);
+  });
+
   it("normalizes malformed PDP and advertised endpoint URLs to AuthZEN request errors", () => {
     expect(() => createAuthZenHttpClient("not an absolute URL")).toThrow(AuthZenRequestError);
     expect(() =>

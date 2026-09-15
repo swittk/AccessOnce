@@ -205,12 +205,12 @@ export function parseAuthZenPdpMetadata(value: unknown): AuthZenPdpMetadata {
       "access_evaluation_endpoint",
       "metadata",
     ),
-    ...(accessEvaluationsEndpoint
+    ...(accessEvaluationsEndpoint !== undefined
       ? { access_evaluations_endpoint: accessEvaluationsEndpoint }
       : {}),
-    ...(subjectEndpoint ? { search_subject_endpoint: subjectEndpoint } : {}),
-    ...(resourceEndpoint ? { search_resource_endpoint: resourceEndpoint } : {}),
-    ...(actionEndpoint ? { search_action_endpoint: actionEndpoint } : {}),
+    ...(subjectEndpoint !== undefined ? { search_subject_endpoint: subjectEndpoint } : {}),
+    ...(resourceEndpoint !== undefined ? { search_resource_endpoint: resourceEndpoint } : {}),
+    ...(actionEndpoint !== undefined ? { search_action_endpoint: actionEndpoint } : {}),
     ...(capabilities ? { capabilities } : {}),
     ...(signedMetadata ? { signed_metadata: signedMetadata } : {}),
   };

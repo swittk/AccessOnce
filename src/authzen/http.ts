@@ -246,7 +246,7 @@ export function createAuthZenHttpClientFromMetadata(
         metadata.access_evaluation_endpoint,
         "access_evaluation_endpoint",
       ),
-      ...(metadata.access_evaluations_endpoint
+      ...(metadata.access_evaluations_endpoint !== undefined
         ? {
             evaluations: requireHttpsEndpoint(
               metadata.access_evaluations_endpoint,
@@ -254,7 +254,7 @@ export function createAuthZenHttpClientFromMetadata(
             ),
           }
         : {}),
-      ...(metadata.search_subject_endpoint
+      ...(metadata.search_subject_endpoint !== undefined
         ? {
             searchSubjects: requireHttpsEndpoint(
               metadata.search_subject_endpoint,
@@ -262,7 +262,7 @@ export function createAuthZenHttpClientFromMetadata(
             ),
           }
         : {}),
-      ...(metadata.search_resource_endpoint
+      ...(metadata.search_resource_endpoint !== undefined
         ? {
             searchResources: requireHttpsEndpoint(
               metadata.search_resource_endpoint,
@@ -270,7 +270,7 @@ export function createAuthZenHttpClientFromMetadata(
             ),
           }
         : {}),
-      ...(metadata.search_action_endpoint
+      ...(metadata.search_action_endpoint !== undefined
         ? {
             searchActions: requireHttpsEndpoint(
               metadata.search_action_endpoint,

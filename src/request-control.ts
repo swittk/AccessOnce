@@ -205,8 +205,8 @@ function parseRequestRelationshipValidity(
     if (end !== undefined && !Number.isSafeInteger(end)) {
       throw new Error("relationship authority endsAtEpochMs must be a safe integer");
     }
-    if (start !== undefined && end !== undefined && Number(start) > Number(end)) {
-      throw new Error("relationship authority start must not be after end");
+    if (start !== undefined && end !== undefined && Number(end) <= Number(start)) {
+      throw new Error("relationship authority end must be after start");
     }
     windows.push({
       ...(start === undefined ? {} : { startsAtEpochMs: Number(start) }),

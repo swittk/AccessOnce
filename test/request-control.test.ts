@@ -127,6 +127,17 @@ describe("access request control wire", () => {
         validity: [],
       },
     })).toThrow(/at least one window/i);
+    expect(() => parseAccessRequestSubmitRequest(access, {
+      idempotencyKey: "k-empty-window",
+      subjectId: "u1",
+      ruleId: "document-access",
+      authority: {
+        kind: "relationship",
+        resource: { type: "document", id: "doc-1" },
+        relation: "reader",
+        validity: { startsAtEpochMs: 20, endsAtEpochMs: 20 },
+      },
+    })).toThrow(/end must be after start/i);
     expect(() => parseAccessRequestTransitionRequest(access, {
       requestId: "r1",
       expectedRevision: "2",
