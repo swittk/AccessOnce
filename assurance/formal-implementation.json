@@ -27,6 +27,21 @@
       "modelSha256": "5d9f73b616a39ea6bea3b10ae57250893709f2bc0846de66e5d8d33fbacdfdde"
     },
     {
+      "source": "src/compiler.ts",
+      "sourceDeclarations": [
+        "createDenyAllSnapshot"
+      ],
+      "model": "formal/Publication.tla",
+      "modelActions": [
+        "BeginChange"
+      ],
+      "modelInvariants": [
+        "SnapshotNeverBroaderThanSource"
+      ],
+      "sourceSha256": "acacd1fdd04a3581cbacf5d80b16380c76943290756727833ce9fc78c75974d3",
+      "modelSha256": "5d9f73b616a39ea6bea3b10ae57250893709f2bc0846de66e5d8d33fbacdfdde"
+    },
+    {
       "source": "src/evaluation.ts",
       "sourceDeclarations": [
         "AccessEvaluationFactory",

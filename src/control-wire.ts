@@ -365,7 +365,7 @@ export function parseAccessGrant<
   if (value.scope !== undefined) {
     const scopeInput = record(value.scope, "grant.scope");
     const supported = access.catalog.supportedScopeDimensions(permission);
-    scope = {};
+    scope = Object.create(null) as Partial<Record<Dimension, AccessScopeSource<Attribute>>>;
     for (const rawDimension of Object.keys(scopeInput)) {
       if (!supported.has(rawDimension as Dimension)) {
         throw new Error(`grant.scope uses unsupported dimension ${rawDimension}`);

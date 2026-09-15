@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  createAccess,
   createAccessGrantControlClient,
+  parseAccessGrant,
   createAccessGrantChanges,
   applyAccessGrantMutations,
   composeAccessGrants,
@@ -95,6 +97,29 @@ function grant(permission: Permission, location?: string): Grant {
 }
 
 describe("grant control wire", () => {
+  it("preserves __proto__ as an ordinary scope dimension instead of widening authority", () => {
+    const protoAccess = createAccess<"read", "read", "__proto__">({
+      catalogId: "proto-scope-test",
+      catalogVersion: 1,
+      compilerVersion: 1,
+      permissions: ["read"],
+      leaves: ["read"],
+      scopeDimensions: { read: ["__proto__"] },
+      includes(granted, requested) {
+        return granted === requested;
+      },
+    });
+    const parsed = parseAccessGrant(
+      protoAccess,
+      JSON.parse('{"permission":"read","scope":{"__proto__":{"kind":"ids","ids":["site-a"]}}}'),
+    );
+    expect(Object.prototype.hasOwnProperty.call(parsed.scope, "__proto__")).toBe(true);
+
+    const snapshot = protoAccess.compile({ grants: [parsed] });
+    expect(protoAccess.can(snapshot, "read")).toBe(false);
+    expect(protoAccess.can(snapshot, "read", JSON.parse('{"__proto__":"site-a"}'))).toBe(true);
+    expect(protoAccess.can(snapshot, "read", JSON.parse('{"__proto__":"site-b"}'))).toBe(false);
+  });
   it("applies ordered add/remove-permissions mutations atomically and returns the next revision", async () => {
     const fixture = createFixture([
       grant("record.read", "a"),
