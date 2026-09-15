@@ -278,6 +278,17 @@ describe("relationship control client", () => {
       )
     ).toThrow(/too many relationship validity windows/);
     expect(() =>
+      parseAccessRelationshipMutationRequest({
+        mutations: [{
+          operation: "add",
+          principal: { type: "user", id: "alice" },
+          resource: { type: "document", id: "doc-1" },
+          relation: "reader",
+          validity: [],
+        }],
+      })
+    ).toThrow(/at least one window/);
+    expect(() =>
       parseAccessRelationshipMutationRequest({ mutations: [] })
     ).toThrow(/non-empty/);
     expect(() =>

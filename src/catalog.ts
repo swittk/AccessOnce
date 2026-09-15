@@ -110,6 +110,11 @@ export function defineAccessCatalog<
   /** Copy implication lists too; these participate in compilation and must never drift after definition. */
   const copiedImplications: Partial<Record<Permission, readonly Permission[]>> = {};
   if (definition.implies) {
+    for (const source of Object.keys(definition.implies)) {
+      if (!permissionSet.has(source as Permission)) {
+        throw new Error(`Unknown implication source permission ${source}`);
+      }
+    }
     for (const permission of permissions) {
       const targets = definition.implies[permission];
       if (!targets) continue;

@@ -109,6 +109,18 @@ describe("AccessOnce core", () => {
     expect(access.can(snapshot, "billing.read", { location: "site-b" })).toBe(false);
   });
 
+  it("rejects implication source keys outside the declared permission set", () => {
+    const implications = {
+      ...catalog.implies,
+      "record.typo": ["record.read"],
+    } as unknown as Readonly<Partial<Record<Permission, readonly Permission[]>>>;
+
+    expect(() => defineAccessCatalog<Permission, Leaf, Dimension>({
+      ...catalog,
+      implies: implications,
+    })).toThrow(/unknown implication source permission record\.typo/i);
+  });
+
   it("snapshots caller-owned catalog arrays so later mutation cannot change authorization meaning", () => {
     const permissions: Permission[] = ["*", "record", "record.read", "record.write", "billing.read"];
     const leaves: Leaf[] = ["record.read", "record.write", "billing.read"];
@@ -468,6 +480,26 @@ describe("AccessOnce core", () => {
     expect(expired.can("record.read", { location: "site-a" })).toBe(false);
     expect(expired.can("record.write", { location: "site-a" })).toBe(false);
     expect(expired.can("billing.read", { location: "site-a" })).toBe(false);
+  });
+
+  it("fails closed for malformed canonical snapshot collection shapes", () => {
+    const access = createAccessEvaluator<Permission, Leaf, Dimension, Attribute>(catalog);
+    const snapshot = compile([{ permission: "record.read" }]);
+    const malformedSnapshots = [
+      { ...snapshot, grants: null } as unknown as typeof snapshot,
+      {
+        ...snapshot,
+        grants: [{ ...snapshot.grants[0]!, constraints: null }],
+      } as unknown as typeof snapshot,
+    ];
+
+    for (const malformed of malformedSnapshots) {
+      expect(() => access.can(malformed, "record.read")).not.toThrow();
+      expect(access.can(malformed, "record.read")).toBe(false);
+      expect(access.hasAny(malformed, "record.read")).toBe(false);
+      expect(access.allowedValues(malformed, "record.read", "location")).toEqual({ kind: "none" });
+      expect(access.queryPlan(malformed, "record.read")).toEqual({ kind: "none" });
+    }
   });
 
   it("fails closed for malformed temporal snapshot collection shapes", () => {

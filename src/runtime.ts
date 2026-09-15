@@ -503,12 +503,26 @@ export function createAccessEvaluator<
     CompiledAccessGrant<Leaf, Dimension, Attribute>
   >(catalog, {
     accepts(snapshot) {
-      return (
-        snapshot.schemaVersion === 1 &&
-        snapshot.catalogId === catalog.catalogId &&
-        snapshot.catalogVersion === catalog.catalogVersion &&
-        snapshot.compilerVersion === catalog.compilerVersion
-      );
+      if (
+        snapshot.schemaVersion !== 1 ||
+        snapshot.catalogId !== catalog.catalogId ||
+        snapshot.catalogVersion !== catalog.catalogVersion ||
+        snapshot.compilerVersion !== catalog.compilerVersion ||
+        !Array.isArray(snapshot.grants)
+      ) {
+        return false;
+      }
+      for (const grant of snapshot.grants as readonly unknown[]) {
+        if (
+          !grant ||
+          typeof grant !== "object" ||
+          Array.isArray(grant) ||
+          !Array.isArray((grant as Readonly<Record<"constraints", unknown>>).constraints)
+        ) {
+          return false;
+        }
+      }
+      return true;
     },
     grants(snapshot) {
       return snapshot.grants;

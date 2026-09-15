@@ -188,6 +188,9 @@ function parseRequestRelationshipValidity(
 ): AccessValidity | readonly AccessValidity[] | undefined {
   if (value === undefined) return undefined;
   const input = Array.isArray(value) ? value : [value];
+  if (input.length === 0) {
+    throw new Error("relationship authority validity must contain at least one window");
+  }
   if (options.maximumValidityWindows !== undefined && input.length > options.maximumValidityWindows) {
     throw new Error("relationship authority has too many validity windows");
   }

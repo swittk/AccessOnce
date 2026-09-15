@@ -282,6 +282,9 @@ function parseRelationshipValidity(
 ): AccessValidity | readonly AccessValidity[] | undefined {
   if (input === undefined) return undefined;
   const raw = Array.isArray(input) ? input : [input];
+  if (raw.length === 0) {
+    throw new Error("relationship validity must contain at least one window");
+  }
   if (maximumWindows !== undefined && raw.length > maximumWindows) {
     throw new Error("too many relationship validity windows in one mutation");
   }
