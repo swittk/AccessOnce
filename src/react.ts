@@ -27,7 +27,8 @@ export function createMutableReactAccessSource<Snapshot>(
       return snapshot;
     },
     getServerSnapshot() {
-      return snapshot;
+      // A mutable source can outlive one SSR request; never reuse its client authority on the server.
+      return undefined;
     },
     subscribe(listener) {
       listeners.add(listener);

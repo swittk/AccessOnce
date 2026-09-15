@@ -75,6 +75,27 @@ describe("BYO adapters", () => {
     expect(access.can(snapshot, "billing.read", { location: "a", assignee: "p2" })).toBe(false);
   });
 
+  it("omits subject-relative grants whose subject value is unresolved", () => {
+    const access = createAdaptedAccessEvaluator(catalog, {
+      accepts: (snapshot: LegacySnapshot) => snapshot.epoch === 2,
+      grants: (snapshot) => snapshot.grants,
+      permission: (grant) => grant.permission,
+      constraints,
+      subjectValue(snapshot, attribute) {
+        return attribute === "assigneeId" ? snapshot.actorAssigneeId : undefined;
+      },
+    });
+    const snapshot: LegacySnapshot = {
+      epoch: 2,
+      grants: [{ permission: "billing.read", ownAssignee: true }],
+    };
+
+    expect(access.can(snapshot, "billing.read", { assignee: "p1" })).toBe(false);
+    expect(access.hasAny(snapshot, "billing.read")).toBe(false);
+    expect(access.allowedValues(snapshot, "billing.read", "assignee")).toEqual({ kind: "none" });
+    expect(access.queryPlan(snapshot, "billing.read")).toEqual({ kind: "none" });
+  });
+
   it("fails closed when malformed BYO fixed-id scope is empty", () => {
     const access = createAdaptedAccessEvaluator(catalog, {
       accepts: (snapshot: LegacySnapshot) => snapshot.epoch === 2,

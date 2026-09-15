@@ -10,11 +10,13 @@ describe("React snapshot source", () => {
     const unsubscribe = source.subscribe(listener);
 
     expect(source.getSnapshot()).toBe(first);
+    expect(source.getServerSnapshot?.()).toBeUndefined();
     source.setSnapshot(first);
     expect(listener).not.toHaveBeenCalled();
     source.setSnapshot(second);
     expect(listener).toHaveBeenCalledOnce();
     expect(source.getSnapshot()).toBe(second);
+    expect(source.getServerSnapshot?.()).toBeUndefined();
 
     unsubscribe();
     source.setSnapshot(undefined);

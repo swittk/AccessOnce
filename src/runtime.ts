@@ -262,6 +262,7 @@ export function createAdaptedAccessEvaluator<
       /** Fixed ids become Sets once here; each dimension must appear at most once in one AND grant. */
       const constraints: IndexedConstraint<Dimension>[] = [];
       const seenDimensions = new Set<Dimension>();
+      let usable = true;
       for (const constraint of adapter.constraints(grant)) {
         // Duplicate dimensions cannot be represented faithfully by allowedValues/queryPlan, so reject
         // malformed BYO wire data instead of letting direct checks and query projection disagree.
@@ -299,14 +300,16 @@ export function createAdaptedAccessEvaluator<
             ids,
           });
         } else {
+          const value = adapter.subjectValue(snapshot, constraint.attribute);
+          if (value === undefined) usable = false;
           constraints.push({
             dimension: constraint.dimension,
             kind: "subject",
-            value: adapter.subjectValue(snapshot, constraint.attribute),
+            value,
           });
         }
       }
-      candidates.push({ constraints });
+      if (usable) candidates.push({ constraints });
     }
 
     for (const [permission, grants] of grantLists) {
