@@ -516,13 +516,21 @@ export function createAccessEvaluator<
         return false;
       }
       for (const grant of snapshot.grants as readonly unknown[]) {
-        if (
-          !grant ||
-          typeof grant !== "object" ||
-          Array.isArray(grant) ||
-          !Array.isArray((grant as Readonly<Record<"constraints", unknown>>).constraints)
-        ) {
-          return false;
+        if (!grant || typeof grant !== "object" || Array.isArray(grant)) return false;
+        const constraints = (grant as Readonly<Record<"constraints", unknown>>).constraints;
+        if (!Array.isArray(constraints)) return false;
+        for (const constraint of constraints as readonly unknown[]) {
+          if (!constraint || typeof constraint !== "object" || Array.isArray(constraint)) return false;
+          const value = constraint as Readonly<Record<string, unknown>>;
+          if (typeof value.dimension !== "string" || !value.dimension) return false;
+          if (value.kind === "ids") {
+            if (!Array.isArray(value.ids)) return false;
+            for (const id of value.ids) if (typeof id !== "string" || !id) return false;
+          } else if (value.kind === "subject") {
+            if (typeof value.attribute !== "string" || !value.attribute) return false;
+          } else {
+            return false;
+          }
         }
       }
       return true;

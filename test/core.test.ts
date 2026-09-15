@@ -503,6 +503,17 @@ describe("AccessOnce core", () => {
         ...snapshot,
         grants: [{ ...snapshot.grants[0]!, constraints: null }],
       } as unknown as typeof snapshot,
+      {
+        ...snapshot,
+        grants: [{ ...snapshot.grants[0]!, constraints: [null] }],
+      } as unknown as typeof snapshot,
+      {
+        ...snapshot,
+        grants: [{
+          ...snapshot.grants[0]!,
+          constraints: [{ dimension: "location", kind: "ids", ids: null }],
+        }],
+      } as unknown as typeof snapshot,
     ];
 
     for (const malformed of malformedSnapshots) {

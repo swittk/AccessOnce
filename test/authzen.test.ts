@@ -133,6 +133,35 @@ describe("AuthZEN adapter", () => {
     ).resolves.toEqual({ decision: true });
   });
 
+  it("normalizes malformed successful HTTP responses to AuthZEN request errors", async () => {
+    const malformedResponses = [
+      new Response(JSON.stringify({ decision: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json", "X-Request-ID": "wrong-request" },
+      }),
+      new Response(JSON.stringify({ decision: true }), {
+        status: 200,
+        headers: { "Content-Type": "text/plain", "X-Request-ID": "request-1" },
+      }),
+      new Response("{", {
+        status: 200,
+        headers: { "Content-Type": "application/json", "X-Request-ID": "request-1" },
+      }),
+    ];
+
+    for (const response of malformedResponses) {
+      const client = createAuthZenHttpClient("https://pdp.example.com", {
+        fetch: async () => response,
+        requestId: () => "request-1",
+      });
+      await expect(client.evaluate({
+        subject: { type: "user", id: "alice" },
+        action: { name: "record.read" },
+        resource: { type: "record", id: "1" },
+      })).rejects.toBeInstanceOf(AuthZenRequestError);
+    }
+  });
+
   it("uses the standard resource-search endpoint and parses authorized entities", async () => {
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       expect(String(input)).toBe("https://pdp.example.com/access/v1/search/resource");

@@ -138,17 +138,17 @@ async function readJsonResponse(response: Response, requestId?: string): Promise
   const text = await response.text();
   if (!response.ok) throw new AuthZenHttpError(response.status, text);
   if (requestId && response.headers.get("X-Request-ID") !== requestId) {
-    throw new Error("AuthZEN PDP did not echo the supplied X-Request-ID");
+    throw new AuthZenRequestError("AuthZEN PDP did not echo the supplied X-Request-ID");
   }
   const contentType = response.headers.get("Content-Type") ?? "";
   if (!contentType.toLowerCase().includes("application/json")) {
-    throw new Error("AuthZEN successful response must use application/json");
+    throw new AuthZenRequestError("AuthZEN successful response must use application/json");
   }
   try {
     const parsed: unknown = JSON.parse(text);
     return parsed;
   } catch (error) {
-    throw new Error("AuthZEN response body is not valid JSON", { cause: error });
+    throw new AuthZenRequestError("AuthZEN response body is not valid JSON", { cause: error });
   }
 }
 
