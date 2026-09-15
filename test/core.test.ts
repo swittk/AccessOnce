@@ -514,6 +514,14 @@ describe("AccessOnce core", () => {
           constraints: [{ dimension: "location", kind: "ids", ids: null }],
         }],
       } as unknown as typeof snapshot,
+      {
+        ...snapshot,
+        subject: { assigneeId: 42 },
+      } as unknown as typeof snapshot,
+      {
+        ...snapshot,
+        subject: { assigneeId: "" },
+      } as unknown as typeof snapshot,
     ];
 
     for (const malformed of malformedSnapshots) {

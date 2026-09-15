@@ -233,7 +233,7 @@ describe("AuthZEN adapter", () => {
     ).toThrow(AuthZenRequestError);
   });
 
-  it("accepts equivalent root PDP identifiers after URL normalization", async () => {
+  it("requires the discovered PDP identifier to exactly match the requested identifier", async () => {
     const fetchMock = vi.fn(async () =>
       new Response(
         JSON.stringify({
@@ -246,7 +246,7 @@ describe("AuthZEN adapter", () => {
 
     await expect(
       discoverAuthZenPdpMetadata("https://pdp.example.com", { fetch: fetchMock }),
-    ).resolves.toMatchObject({ policy_decision_point: "https://pdp.example.com/" });
+    ).rejects.toThrow(/does not match the requested PDP identifier/);
   });
 
 });

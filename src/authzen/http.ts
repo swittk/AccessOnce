@@ -295,9 +295,9 @@ export async function discoverAuthZenPdpMetadata(
     headers: await resolveHeaders(options, false),
   });
   const metadata = parseAuthZenPdpMetadata(await readJsonResponse(response));
-  const requestedPdp = parsePolicyDecisionPoint(policyDecisionPoint).href;
-  const discoveredPdp = parsePolicyDecisionPoint(metadata.policy_decision_point).href;
-  if (discoveredPdp !== requestedPdp) {
+  parsePolicyDecisionPoint(policyDecisionPoint);
+  parsePolicyDecisionPoint(metadata.policy_decision_point);
+  if (metadata.policy_decision_point !== policyDecisionPoint) {
     throw new AuthZenRequestError(
       "AuthZEN metadata policy_decision_point does not match the requested PDP identifier",
     );

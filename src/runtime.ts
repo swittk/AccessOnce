@@ -533,6 +533,13 @@ export function createAccessEvaluator<
           }
         }
       }
+      const subject = snapshot.subject as unknown;
+      if (subject !== undefined) {
+        if (!subject || typeof subject !== "object" || Array.isArray(subject)) return false;
+        for (const value of Object.values(subject as Readonly<Record<string, unknown>>)) {
+          if (typeof value !== "string" || !value) return false;
+        }
+      }
       return true;
     },
     grants(snapshot) {
