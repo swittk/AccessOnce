@@ -106,6 +106,7 @@ describe("AuthZEN adapter", () => {
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
       expect(String(input)).toBe("https://pdp.example.com/tenant/access/v1/evaluation");
       expect(init?.method).toBe("POST");
+      expect(init?.redirect).toBe("error");
       const headers = new Headers(init?.headers);
       expect(headers.get("Content-Type")).toBe("application/json");
       expect(headers.get("Authorization")).toBe("Bearer test");

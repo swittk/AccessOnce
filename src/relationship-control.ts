@@ -179,8 +179,11 @@ export function createAccessRelationshipChanges(args: {
   for (const subject of args.after.subjects)
     after.set(accessRelationshipSubjectKey(subject), subject);
   const mutations: AccessRelationshipMutation[] = [];
+  const wildcardRemovedPrincipals = new Set<string>();
   for (const [key, subject] of before) {
-    if (!after.has(key))
+    if (!after.has(key)) {
+      if (subject.validity === undefined)
+        wildcardRemovedPrincipals.add(accessRelationshipSubjectKey({ principal: subject.principal }));
       mutations.push({
         operation: "remove",
         principal: subject.principal,
@@ -188,9 +191,13 @@ export function createAccessRelationshipChanges(args: {
         relation: args.relation,
         ...(subject.validity === undefined ? {} : { validity: subject.validity }),
       });
+    }
   }
   for (const [key, subject] of after) {
-    if (!before.has(key))
+    if (
+      !before.has(key) ||
+      wildcardRemovedPrincipals.has(accessRelationshipSubjectKey({ principal: subject.principal }))
+    )
       mutations.push({
         operation: "add",
         principal: subject.principal,

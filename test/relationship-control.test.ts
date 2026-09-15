@@ -173,6 +173,40 @@ describe("relationship control client", () => {
     ).toEqual([]);
   });
 
+  it("re-adds retained bounded entries after removing a timeless principal source", () => {
+    const resource = { type: "document", id: "doc-1" };
+    const bounded = {
+      principal: { type: "user", id: "alice" },
+      validity: { startsAtEpochMs: 10, endsAtEpochMs: 20 },
+    };
+
+    expect(
+      createAccessRelationshipChanges({
+        resource,
+        relation: "reader",
+        before: {
+          unrestricted: false,
+          subjects: [{ principal: { type: "user", id: "alice" } }, bounded],
+        },
+        after: { unrestricted: false, subjects: [bounded] },
+      }),
+    ).toEqual([
+      {
+        operation: "remove",
+        principal: { type: "user", id: "alice" },
+        resource,
+        relation: "reader",
+      },
+      {
+        operation: "add",
+        principal: { type: "user", id: "alice" },
+        resource,
+        relation: "reader",
+        validity: { startsAtEpochMs: 10, endsAtEpochMs: 20 },
+      },
+    ]);
+  });
+
   it("distinguishes principal tuples even when either component contains a NUL", () => {
     const resource = { type: "document", id: "doc-1" };
     expect(

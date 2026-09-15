@@ -163,6 +163,7 @@ async function postJson(
   const requestId = options.requestId?.();
   const response = await fetchImpl(endpoint, {
     method: "POST",
+    redirect: "error",
     headers: await resolveHeaders(options, true, requestId),
     body: JSON.stringify(body),
   });
