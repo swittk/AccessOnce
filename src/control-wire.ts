@@ -403,6 +403,9 @@ export function parseAccessGrant<
   let validity: AccessValidity | readonly AccessValidity[] | undefined;
   if (value.validity !== undefined) {
     const rawWindows = Array.isArray(value.validity) ? value.validity : [value.validity];
+    if (rawWindows.length === 0) {
+      throw new Error("grant.validity must contain at least one window");
+    }
     if (options.maximumValidityWindows !== undefined && rawWindows.length > options.maximumValidityWindows) {
       throw new Error("grant has too many validity windows");
     }

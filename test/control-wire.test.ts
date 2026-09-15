@@ -363,6 +363,15 @@ it("round-trips temporal grant edits and compares reordered validity windows sem
       }],
     }],
   })).rejects.toThrow(/start must not be after end/);
+
+  await expect(fixture.control.grants.mutate({
+    subjectId: "alice",
+    expectedRevision: "2",
+    mutations: [{
+      operation: "add",
+      grants: [{ permission: "record.read", validity: [] }],
+    }],
+  })).rejects.toThrow(/at least one window/);
 });
 
 it("preserves order when mixed batches remove, replace, and add duplicate grants", () => {

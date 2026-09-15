@@ -63,9 +63,9 @@ export function createReactAccess<Snapshot, Leaf extends string, Dimension exten
   const subscribe = (listener: () => void) => source.subscribe(listener);
   /** Read the client snapshot through the source object without allocating inside render. */
   const getSnapshot = () => source.getSnapshot();
-  /** Read the server snapshot with the same receiver-preserving rule and client fallback. */
+  /** Read explicit request-scoped server state, otherwise fail closed instead of reusing client authority. */
   const getServerSnapshot = () =>
-    source.getServerSnapshot ? source.getServerSnapshot() : source.getSnapshot();
+    source.getServerSnapshot ? source.getServerSnapshot() : undefined;
 
   /** Subscribe once and expose a memoized multi-check facade for one render tree. */
   function useAccess() {
