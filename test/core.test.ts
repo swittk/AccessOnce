@@ -255,6 +255,18 @@ describe("AccessOnce core", () => {
     ).toEqual({ kind: "some", clauses: [{ location: ["site-all"] }] });
   });
 
+  it("rejects hierarchical catalogs whose wildcard is not grantable", () => {
+    expect(() => createHierarchicalAccess({
+      catalogId: "missing-wildcard-test",
+      catalogVersion: 1,
+      compilerVersion: 1,
+      wildcard: "*",
+      permissions: ["record.read"],
+      leaves: ["record.read"],
+      scopeDimensions: { "record.read": [] },
+    })).toThrow(/Wildcard permission .* is not declared/);
+  });
+
   it("offers a declarative hierarchy facade for dotted permission trees", () => {
     const access = createHierarchicalAccess({
       catalogId: "hierarchy-facade-test",

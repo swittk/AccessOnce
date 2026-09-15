@@ -192,6 +192,9 @@ export function defineHierarchicalAccessCatalog<
   const separator = definition.separator ?? ".";
   if (!separator) throw new Error("permission hierarchy separator must not be empty");
   const { wildcard, separator: _separator, ...catalogDefinition } = definition;
+  if (!catalogDefinition.permissions.includes(wildcard)) {
+    throw new Error(`Wildcard permission ${String(wildcard)} is not declared`);
+  }
   return defineAccessCatalog({
     ...catalogDefinition,
     includes(granted, requested) {

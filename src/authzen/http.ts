@@ -72,19 +72,29 @@ type AuthZenHttpEndpoints = {
 
 /** Validate the AuthZEN PDP identifier rules needed by discovery/default endpoint construction. */
 function parsePolicyDecisionPoint(value: string): URL {
-  const url = new URL(value);
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new AuthZenRequestError("AuthZEN policy_decision_point must be an absolute URL");
+  }
   if (url.protocol !== "https:") {
-    throw new Error("AuthZEN policy_decision_point must use https");
+    throw new AuthZenRequestError("AuthZEN policy_decision_point must use https");
   }
   if (url.search || url.hash) {
-    throw new Error("AuthZEN policy_decision_point must not contain query or fragment components");
+    throw new AuthZenRequestError("AuthZEN policy_decision_point must not contain query or fragment components");
   }
   return url;
 }
 
 /** Validate an advertised operation endpoint before configured credentials can be sent to it. */
 function requireHttpsEndpoint(value: string, field: string): string {
-  const url = new URL(value);
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new AuthZenRequestError(`AuthZEN ${field} must be an absolute URL`);
+  }
   if (url.protocol !== "https:") {
     throw new AuthZenRequestError(`AuthZEN ${field} must use https`);
   }

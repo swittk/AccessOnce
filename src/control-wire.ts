@@ -420,8 +420,8 @@ export function parseAccessGrant<
       if (end !== undefined && !Number.isSafeInteger(end)) {
         throw new Error("grant.validity.endsAtEpochMs must be a safe integer");
       }
-      if (start !== undefined && end !== undefined && Number(start) > Number(end)) {
-        throw new Error("grant.validity start must not be after end");
+      if (start !== undefined && end !== undefined && Number(start) >= Number(end)) {
+        throw new Error("grant.validity end must be after start");
       }
       windows.push({
         ...(start === undefined ? {} : { startsAtEpochMs: Number(start) }),

@@ -194,6 +194,16 @@ describe("AuthZEN adapter", () => {
     ).toThrow("access_evaluation_endpoint must use https");
   });
 
+  it("normalizes malformed PDP and advertised endpoint URLs to AuthZEN request errors", () => {
+    expect(() => createAuthZenHttpClient("not an absolute URL")).toThrow(AuthZenRequestError);
+    expect(() =>
+      createAuthZenHttpClientFromMetadata({
+        policy_decision_point: "https://pdp.example.com",
+        access_evaluation_endpoint: "not an absolute URL",
+      }),
+    ).toThrow(AuthZenRequestError);
+  });
+
   it("accepts equivalent root PDP identifiers after URL normalization", async () => {
     const fetchMock = vi.fn(async () =>
       new Response(
