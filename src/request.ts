@@ -1162,11 +1162,24 @@ export function createAccessRequestService<Permission extends string, Leaf exten
           (transition.action === "approve" && current.state === "approved") ||
           (transition.action === "deny" && current.state === "denied") ||
           (transition.action === "cancel" && current.state === "cancelled");
-        if (sameTerminal) return current;
-        if (current.state === "issuing") {
-          if (transition.action !== "approve") {
+        if (sameTerminal || current.state === "issuing") {
+          if (current.state === "issuing" && transition.action !== "approve") {
             throw new Error("access request approval is already being issued and cannot be rewritten");
           }
+          // User-facing retries still require current object-level authorization. Recovery jobs use recover() instead.
+          const durableAuthority = transition.action === "approve"
+            ? (current.decision?.action === "approve" && current.decision.authority
+              ? current.decision.authority
+              : current.authority)
+            : undefined;
+          const authorized = await options.authorizeTransition({
+            actorId,
+            action: transition.action,
+            request: current,
+            ...(durableAuthority === undefined ? {} : { authority: durableAuthority }),
+          });
+          if (!authorized) throw new Error("actor is not authorized for this access request transition");
+          if (sameTerminal) return current;
           return finishIssuance(current);
         }
         if (current.state !== "pending") throw new Error("access request already has a conflicting terminal state");

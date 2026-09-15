@@ -569,13 +569,15 @@ describe("access request service", () => {
     const store = createStore();
     const committed = new Set<string>();
     let failAfterCommit = true;
+    let issueCalls = 0;
     const service = createAccessRequestService({
       catalog: access.catalog,
       store,
       resolveRule: () => ({ rule: documentRule() }),
       resolveApprovalRoute: () => ({ queue: "restricted" }),
-      authorizeTransition: () => true,
+      authorizeTransition: ({ actorId }) => actorId === "boss",
       async issue({ issuanceKey }) {
+        issueCalls += 1;
         committed.add(issuanceKey);
         if (failAfterCommit) throw new Error("simulated crash after durable authority write");
       },
@@ -592,8 +594,16 @@ describe("access request service", () => {
       action: "approve",
     })).rejects.toThrow(/simulated crash/);
     expect((await service.read(pending.requestId)).state).toBe("issuing");
+    expect(issueCalls).toBe(1);
+    await expect(service.transition("intruder", {
+      requestId: pending.requestId,
+      expectedRevision: pending.revision,
+      action: "approve",
+    })).rejects.toThrow(/not authorized/i);
+    expect(issueCalls).toBe(1);
     failAfterCommit = false;
     expect((await service.recover(pending.requestId)).state).toBe("approved");
+    expect(issueCalls).toBe(2);
     expect(committed).toEqual(new Set([`access-request:${pending.requestId}`]));
   });
 
@@ -604,7 +614,7 @@ describe("access request service", () => {
       store,
       resolveRule: () => ({ rule: documentRule() }),
       resolveApprovalRoute: () => ({ queue: "restricted" }),
-      authorizeTransition: () => true,
+      authorizeTransition: ({ actorId }) => actorId === "boss",
       issue: async () => {},
     });
     const input = {
@@ -625,6 +635,12 @@ describe("access request service", () => {
       action: "deny",
       reason: "no",
     });
+    await expect(service.transition("intruder", {
+      requestId: first.requestId,
+      expectedRevision: first.revision,
+      action: "deny",
+      reason: "different retry text",
+    })).rejects.toThrow(/not authorized/i);
     expect(await service.transition("boss", {
       requestId: first.requestId,
       expectedRevision: first.revision,
