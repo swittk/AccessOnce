@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "bindings": [
+    {
+      "source": "src/publication.ts",
+      "sourceDeclarations": [
+        "AccessPublicationAdapter",
+        "PublishAccessSnapshotChangeArgs",
+        "publishAccessSnapshotChange",
+        "recoverPublishedAccessSnapshot",
+        "PublishAccessChangeArgs",
+        "publishAccessChange",
+        "recoverAccessSnapshot"
+      ],
+      "model": "formal/Publication.tla",
+      "modelActions": [
+        "BeginChange",
+        "WriteSource",
+        "PublishCompiled",
+        "Crash",
+        "Recover"
+      ],
+      "modelInvariants": [
+        "SnapshotNeverBroaderThanSource"
+      ],
+      "sourceSha256": "13a34a743aa3f76bc9c2fd19b425221637815ff42c072639796b6ea194d39ac5",
+      "modelSha256": "5d9f73b616a39ea6bea3b10ae57250893709f2bc0846de66e5d8d33fbacdfdde"
+    },
+    {
+      "source": "src/compiler.ts",
+      "sourceDeclarations": [
+        "createDenyAllSnapshot"
+      ],
+      "model": "formal/Publication.tla",
+      "modelActions": [
+        "BeginChange"
+      ],
+      "modelInvariants": [
+        "SnapshotNeverBroaderThanSource"
+      ],
+      "sourceSha256": "acacd1fdd04a3581cbacf5d80b16380c76943290756727833ce9fc78c75974d3",
+      "modelSha256": "5d9f73b616a39ea6bea3b10ae57250893709f2bc0846de66e5d8d33fbacdfdde"
+    },
+    {
+      "source": "src/evaluation.ts",
+      "sourceDeclarations": [
+        "AccessEvaluationFactory",
+        "TemporalRuntimeState",
+        "createAccessEvaluationFactory"
+      ],
+      "model": "formal/TemporalEvaluation.tla",
+      "modelActions": [
+        "ChooseTime",
+        "Advance",
+        "Rewind",
+        "Finish"
+      ],
+      "modelInvariants": [
+        "CursorWithinBounds",
+        "ActiveMatchesCursor",
+        "IdleIntervalContainsTime"
+      ],
+      "sourceSha256": "92c553deb23d1b686d6976d879b957dd27da885aaf6ce2f7f3d02b977f6d3d82",
+      "modelSha256": "9f52b1300814ac0e6bf96bd4740dc0b0f2511f336dcfd41f0e2b59db90f72526"
+    },
+    {
+      "source": "src/request.ts",
+      "sourceDeclarations": [
+        "AccessRequestState",
+        "AccessRequestStore",
+        "AccessRequestIssuance",
+        "createAccessRequestService"
+      ],
+      "sourceDependencies": [
+        "accessRequestIssuanceKey",
+        "requestWithState"
+      ],
+      "model": "formal/RequestApproval.tla",
+      "modelActions": [
+        "SubmitManual",
+        "SubmitAutomatic",
+        "BeginAutomatic",
+        "BeginApproval",
+        "IssueAuthority",
+        "FinishApproval",
+        "Deny",
+        "Cancel",
+        "Expire"
+      ],
+      "modelInvariants": [
+        "ApprovedImpliesIssued",
+        "IssuanceRequiresDurableClaim",
+        "CommittedClaimWasAllowed",
+        "RejectedRequestsNeverIssue"
+      ],
+      "sourceSha256": "4a083e531c29cd561dc7df61ef6d618ac49ebdae9cc45c89dc7632ee63d667aa",
+      "modelSha256": "6b448c5f29395d8fc6d73f7d4335caaa36bbfe52bcf6a61e485f618d20119b83"
+    }
+  ]
+}
