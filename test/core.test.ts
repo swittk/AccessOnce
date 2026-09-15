@@ -109,6 +109,47 @@ describe("AccessOnce core", () => {
     expect(access.can(snapshot, "billing.read", { location: "site-b" })).toBe(false);
   });
 
+  it("inherits intermediate-node implications through a broader parent assignment", () => {
+    type NestedPermission =
+      | "domain"
+      | "record"
+      | "record.read"
+      | "record.write"
+      | "billing.read"
+      | "audit.read";
+    type NestedLeaf = "record.read" | "record.write" | "billing.read" | "audit.read";
+    const nestedCatalog = defineAccessCatalog<NestedPermission, NestedLeaf, Dimension>({
+      catalogId: "intermediate-implication-test",
+      catalogVersion: 1,
+      compilerVersion: 1,
+      permissions: ["domain", "record", "record.read", "record.write", "billing.read", "audit.read"],
+      leaves: ["record.read", "record.write", "billing.read", "audit.read"],
+      scopeDimensions: {
+        "record.read": ["location"],
+        "record.write": ["location"],
+        "billing.read": ["location"],
+        "audit.read": ["location"],
+      },
+      includes(granted, requested) {
+        return granted === requested ||
+          (granted === "record" && requested.startsWith("record.")) ||
+          (granted === "domain" && (requested.startsWith("record.") || requested === "billing.read"));
+      },
+      implies: { record: ["audit.read"] },
+    });
+    const snapshot = compileAccessSnapshot<NestedPermission, NestedLeaf, Dimension, Attribute>(nestedCatalog, {
+      grants: [{
+        permission: "domain",
+        scope: { location: { kind: "ids", ids: ["site-a"] } },
+      }],
+    });
+    const access = createAccessEvaluator<NestedPermission, NestedLeaf, Dimension, Attribute>(nestedCatalog);
+    expect(access.can(snapshot, "record.read", { location: "site-a" })).toBe(true);
+    expect(access.can(snapshot, "billing.read", { location: "site-a" })).toBe(true);
+    expect(access.can(snapshot, "audit.read", { location: "site-a" })).toBe(true);
+    expect(access.can(snapshot, "audit.read", { location: "site-b" })).toBe(false);
+  });
+
   it("rejects implication source keys outside the declared permission set", () => {
     const implications = {
       ...catalog.implies,

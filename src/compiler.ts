@@ -179,6 +179,29 @@ export function compileAccessSnapshot<
   const visited = new Set<string>();
   const compiled = new Map<string, CompiledGrantAccumulator<Leaf, Dimension, Attribute>>();
 
+  // Non-leaf permission implications are dependencies of any parent assignment that fully covers
+  // that node's concrete leaves. Precompute those leaf requirements once on this cold compiler path.
+  const intermediateImplicationSources: Array<{
+    /** Intermediate permission node that owns these dependencies. */
+    permission: Permission;
+    /** Concrete leaves a broader parent must cover before inheriting the dependencies. */
+    leaves: readonly Leaf[];
+    /** Permissions implied by the intermediate node. */
+    targets: readonly Permission[];
+  }> = [];
+  if (catalog.implies) {
+    for (const permission of catalog.permissions) {
+      if (catalog.isLeaf(permission)) continue;
+      const targets = catalog.implies[permission];
+      if (!targets?.length) continue;
+      const leaves: Leaf[] = [];
+      for (const leaf of catalog.leaves) {
+        if (catalog.includes(permission, leaf)) leaves.push(leaf);
+      }
+      if (leaves.length) intermediateImplicationSources.push({ permission, leaves, targets });
+    }
+  }
+
   for (let index = 0; index < pending.length; index += 1) {
     const sourceGrant = pending[index]!;
     if (!catalog.isPermission(sourceGrant.permission)) {
@@ -197,8 +220,10 @@ export function compileAccessSnapshot<
     visited.add(sourceKey);
 
     // Parent nodes are assignment shorthand only; runtime snapshots contain concrete leaves.
+    let coveredLeafCount = 0;
     for (const leaf of catalog.leaves) {
       if (!catalog.includes(sourceGrant.permission, leaf)) continue;
+      coveredLeafCount += 1;
       const grant: CompiledAccessGrant<Leaf, Dimension, Attribute> = Object.freeze({
         permission: leaf,
         constraints: normalized,
@@ -221,6 +246,29 @@ export function compileAccessSnapshot<
       const impliedByLeaf = leaf === sourceGrant.permission ? undefined : catalog.implies?.[leaf];
       if (impliedByLeaf) {
         for (const permission of impliedByLeaf) {
+          pending.push({
+            permission,
+            ...(sourceGrant.scope ? { scope: sourceGrant.scope } : {}),
+            ...(sourceGrant.validity === undefined ? {} : { validity: sourceGrant.validity }),
+          });
+        }
+      }
+    }
+
+    // A non-leaf parent must also inherit dependencies declared on covered intermediate nodes.
+    // If it already covers every leaf, those dependencies cannot add authority and can be skipped.
+    if (!catalog.isLeaf(sourceGrant.permission) && coveredLeafCount < catalog.leaves.length) {
+      for (const dependencySource of intermediateImplicationSources) {
+        if (dependencySource.permission === sourceGrant.permission) continue;
+        let coversDependencySource = true;
+        for (const leaf of dependencySource.leaves) {
+          if (!catalog.includes(sourceGrant.permission, leaf)) {
+            coversDependencySource = false;
+            break;
+          }
+        }
+        if (!coversDependencySource) continue;
+        for (const permission of dependencySource.targets) {
           pending.push({
             permission,
             ...(sourceGrant.scope ? { scope: sourceGrant.scope } : {}),
