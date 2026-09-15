@@ -62,6 +62,13 @@ function requireUnsafePublicationRejected() {
     { cwd: formalDir, encoding: "utf8", timeout: 30_000, maxBuffer: 8 * 1024 * 1024 },
   );
   const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  if (result.error || result.signal) {
+    process.stdout.write(output);
+    throw new Error(
+      "Unsafe publication model did not complete",
+      result.error ? { cause: result.error } : undefined,
+    );
+  }
   if (!/Invariant SnapshotNeverBroaderThanSource is violated/u.test(output)) {
     process.stdout.write(output);
     throw new Error("Unsafe publication mutation did not violate SnapshotNeverBroaderThanSource");
