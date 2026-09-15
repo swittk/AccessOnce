@@ -20,7 +20,7 @@ BeginChange ==
 
 WriteSource ==
   /\ phase = "denied"
-  /\ source' = NewSource
+  /\ source' \in SUBSET Permissions
   /\ phase' = "sourceWritten"
   /\ UNCHANGED snapshot
 

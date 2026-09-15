@@ -301,6 +301,17 @@ describe("relationship control client", () => {
           validity: { startsAtEpochMs: 20, endsAtEpochMs: 10 },
         }],
       })
-    ).toThrow(/start must not be after end/);
+    ).toThrow(/start must be before end/);
+    expect(() =>
+      parseAccessRelationshipMutationRequest({
+        mutations: [{
+          operation: "add",
+          principal: { type: "user", id: "alice" },
+          resource: { type: "document", id: "doc-1" },
+          relation: "reader",
+          validity: { startsAtEpochMs: 20, endsAtEpochMs: 20 },
+        }],
+      })
+    ).toThrow(/start must be before end/);
   });
 });
