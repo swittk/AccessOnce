@@ -36,6 +36,28 @@ describe("access snapshot client", () => {
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
+  it("notifies each subscriber present at a publish start at most once", async () => {
+    const client = createAccessSnapshotClient({
+      transport: {
+        async read(subject: string) {
+          return { subject };
+        },
+      },
+    });
+    let unsubscribe: () => void = () => undefined;
+    const listener = vi.fn(() => {
+      if (listener.mock.calls.length !== 1) return;
+      unsubscribe();
+      unsubscribe = client.subscribe(listener);
+    });
+    unsubscribe = client.subscribe(listener);
+
+    await client.setSubject("alice");
+
+    expect(listener).toHaveBeenCalledTimes(2);
+    unsubscribe();
+  });
+
   it("ignores a late response from the previous login even when the transport ignores abort", async () => {
     const alice = deferred<{ subject: string } | undefined>();
     const bob = deferred<{ subject: string } | undefined>();

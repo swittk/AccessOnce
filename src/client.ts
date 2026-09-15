@@ -98,7 +98,7 @@ export function createAccessSnapshotClient<Subject, Snapshot>(
   function publish(next: AccessSnapshotClientState<Snapshot>) {
     if (state === next) return;
     state = Object.freeze(next);
-    for (const listener of listeners) listener();
+    for (const listener of [...listeners]) listener();
   }
 
   /** Cancel the prior subject/read without assuming the transport honors AbortSignal. */

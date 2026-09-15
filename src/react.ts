@@ -37,7 +37,7 @@ export function createMutableReactAccessSource<Snapshot>(
     setSnapshot(nextSnapshot) {
       if (Object.is(snapshot, nextSnapshot)) return;
       snapshot = nextSnapshot;
-      for (const listener of listeners) listener();
+      for (const listener of [...listeners]) listener();
     },
   };
 }
