@@ -81,6 +81,7 @@ describe("fail-closed publication", () => {
       ).rejects.toThrow(/crash/);
 
       const state = fixture.state();
+      expect(state.snapshot.grants.map((grant) => grant.permission)).not.toContain("write");
       expect(
         state.snapshot.grants.every((grant) =>
           state.source.source.grants.includes(grant.permission),
