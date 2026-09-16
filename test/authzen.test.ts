@@ -134,6 +134,43 @@ describe("AuthZEN adapter", () => {
     ).resolves.toEqual({ decision: true });
   });
 
+  it("validates boxcar response shape and short-circuit cardinality", async () => {
+    const request = {
+      subject: { type: "user", id: "alice" },
+      action: { name: "record.read" },
+      options: { evaluations_semantic: "deny_on_first_deny" as const },
+      evaluations: [
+        { resource: { type: "record", id: "1" } },
+        { resource: { type: "record", id: "2" } },
+      ],
+    };
+    const responses = [
+      { decision: true },
+      { evaluations: [{ decision: false }, { decision: true }] },
+      { evaluations: [{ decision: true }] },
+      { evaluations: [{ decision: true }, { decision: true }, { decision: false }] },
+    ];
+
+    for (const payload of responses) {
+      const client = createAuthZenHttpClient("https://pdp.example.com", {
+        fetch: async () => new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      });
+      await expect(client.evaluations(request)).rejects.toBeInstanceOf(AuthZenRequestError);
+    }
+
+    const client = createAuthZenHttpClient("https://pdp.example.com", {
+      fetch: async () => new Response(JSON.stringify({
+        evaluations: [{ decision: true }, { decision: false }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    });
+    await expect(client.evaluations(request)).resolves.toEqual({
+      evaluations: [{ decision: true }, { decision: false }],
+    });
+  });
+
   it("normalizes malformed successful HTTP responses to AuthZEN request errors", async () => {
     const malformedResponses = [
       new Response(JSON.stringify({ decision: true }), {
@@ -191,15 +228,16 @@ describe("AuthZEN adapter", () => {
     expect(authZenMetadataUrl("https://pdp.example.com/tenant1")).toBe(
       "https://pdp.example.com/.well-known/authzen-configuration/tenant1",
     );
-    const fetchMock = vi.fn(async () =>
-      new Response(
+    const fetchMock = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(init?.redirect).toBe("error");
+      return new Response(
         JSON.stringify({
           policy_decision_point: "https://pdp.example.com/tenant1",
           access_evaluation_endpoint: "https://pdp.example.com/evaluate",
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
-    );
+      );
+    });
     const metadata = await discoverAuthZenPdpMetadata(
       "https://pdp.example.com/tenant1",
       { fetch: fetchMock },

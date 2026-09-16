@@ -6,7 +6,6 @@ import {
   parseAuthZenResource,
   parseAuthZenSearchResponse,
   parseAuthZenSubject,
-  requireAuthZenObject,
 } from "./codec.js";
 import { AuthZenHttpError, AuthZenRequestError } from "./errors.js";
 import type {
@@ -176,6 +175,48 @@ function requireEndpoint(endpoint: string | undefined, capability: string): stri
   return endpoint;
 }
 
+/** Parse one Access Evaluations response using the request mode and short-circuit contract. */
+function parseEvaluationsHttpResponse(
+  request: AuthZenEvaluationsRequest,
+  value: unknown,
+): AuthZenDecision | AuthZenEvaluationsResponse {
+  const requested = request.evaluations;
+  if (!requested || requested.length === 0) return parseAuthZenDecision(value);
+
+  const response = parseAuthZenEvaluationsResponse(value);
+  const returned = response.evaluations;
+  if (returned.length === 0 || returned.length > requested.length) {
+    throw new AuthZenRequestError(
+      "AuthZEN evaluations response cardinality does not match the request",
+    );
+  }
+
+  const semantic = request.options?.evaluations_semantic ?? "execute_all";
+  if (semantic === "execute_all") {
+    if (returned.length !== requested.length) {
+      throw new AuthZenRequestError(
+        "AuthZEN execute_all response must contain one decision per requested evaluation",
+      );
+    }
+    return response;
+  }
+
+  const shortCircuitDecision = semantic === "deny_on_first_deny" ? false : true;
+  for (let index = 0; index < returned.length - 1; index += 1) {
+    if (returned[index]!.decision === shortCircuitDecision) {
+      throw new AuthZenRequestError(
+        "AuthZEN evaluations response continued after its short-circuit decision",
+      );
+    }
+  }
+  if (returned.length < requested.length && returned.at(-1)!.decision !== shortCircuitDecision) {
+    throw new AuthZenRequestError(
+      "AuthZEN evaluations response ended before its short-circuit decision",
+    );
+  }
+  return response;
+}
+
 /** Create the HTTP client implementation over one resolved endpoint set. */
 function createClient(
   endpoints: AuthZenHttpEndpoints,
@@ -187,11 +228,10 @@ function createClient(
     },
     async evaluations(request) {
       const endpoint = requireEndpoint(endpoints.evaluations, "Access Evaluations");
-      const value = await postJson(endpoint, request, options);
-      const object = requireAuthZenObject(value, "response");
-      return Array.isArray(object.evaluations)
-        ? parseAuthZenEvaluationsResponse(object)
-        : parseAuthZenDecision(object);
+      return parseEvaluationsHttpResponse(
+        request,
+        await postJson(endpoint, request, options),
+      );
     },
     async searchSubjects(request) {
       const endpoint = requireEndpoint(endpoints.searchSubjects, "Subject Search");
@@ -293,6 +333,7 @@ export async function discoverAuthZenPdpMetadata(
   if (!fetchImpl) throw new Error("No fetch implementation is available for AuthZEN discovery");
   const response = await fetchImpl(authZenMetadataUrl(policyDecisionPoint), {
     method: "GET",
+    redirect: "error",
     headers: await resolveHeaders(options, false),
   });
   const metadata = parseAuthZenPdpMetadata(await readJsonResponse(response));
