@@ -1,7 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AccessEvaluator } from "../src/runtime.js";
 
-const reactProbe = vi.hoisted(() => ({ serverSnapshot: undefined as unknown }));
+const reactProbe = vi.hoisted(() => ({
+  serverSnapshot: undefined as unknown,
+  renderServerSnapshot: false,
+}));
 
 vi.mock("react", () => ({
   useMemo<Value>(factory: () => Value): Value {
@@ -15,7 +18,7 @@ vi.mock("react", () => ({
     const unsubscribe = subscribe(() => undefined);
     unsubscribe();
     reactProbe.serverSnapshot = getServerSnapshot();
-    return getSnapshot();
+    return reactProbe.renderServerSnapshot ? getServerSnapshot() : getSnapshot();
   },
 }));
 
@@ -56,6 +59,11 @@ class ReceiverCheckingSource {
 }
 
 describe("React access binding", () => {
+  beforeEach(() => {
+    reactProbe.renderServerSnapshot = false;
+    reactProbe.serverSnapshot = undefined;
+  });
+
   it("fails closed during SSR when a custom source omits getServerSnapshot", () => {
     const snapshot = { revision: 1 };
     const source = {
@@ -69,9 +77,11 @@ describe("React access binding", () => {
       queryPlan: () => ({ kind: "all" }),
     };
 
+    reactProbe.renderServerSnapshot = true;
     const access = createReactAccess(evaluator, source).useAccess();
     expect(reactProbe.serverSnapshot).toBeUndefined();
-    expect(access.ready).toBe(true);
+    expect(access.ready).toBe(false);
+    expect(access.can("record.read", { location: "site-a" })).toBe(false);
   });
 
   it("preserves this for class/object snapshot sources", () => {
