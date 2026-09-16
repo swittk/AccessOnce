@@ -134,13 +134,22 @@ async function resolveHeaders(
 
 /** Parse a successful JSON response and enforce request-id echo when the PEP supplied one. */
 async function readJsonResponse(response: Response, requestId?: string): Promise<unknown> {
+  if (!response.ok) {
+    let text = "";
+    try {
+      text = await response.text();
+    } catch {
+      // The HTTP status remains the primary transport failure even when the optional error body aborts.
+    }
+    throw new AuthZenHttpError(response.status, text);
+  }
   const text = await response.text();
-  if (!response.ok) throw new AuthZenHttpError(response.status, text);
   if (requestId && response.headers.get("X-Request-ID") !== requestId) {
     throw new AuthZenRequestError("AuthZEN PDP did not echo the supplied X-Request-ID");
   }
   const contentType = response.headers.get("Content-Type") ?? "";
-  if (!contentType.toLowerCase().includes("application/json")) {
+  const mediaType = contentType.split(";", 1)[0]?.trim().toLowerCase();
+  if (mediaType !== "application/json") {
     throw new AuthZenRequestError("AuthZEN successful response must use application/json");
   }
   try {

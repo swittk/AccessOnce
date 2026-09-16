@@ -190,6 +190,10 @@ describe("access snapshot client", () => {
     expect(client.getState()).toEqual({ status: "error", error: failure });
     expect(read).not.toHaveBeenCalled();
 
+    await expect(client.refresh()).resolves.toBeUndefined();
+    expect(client.getSnapshot()).toBeUndefined();
+    expect(read).not.toHaveBeenCalled();
+
     await expect(client.setSubject("alice")).resolves.toEqual({ subject: "alice" });
     expect(subscriptionAttempts).toBe(2);
     expect(read).toHaveBeenCalledOnce();

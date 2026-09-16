@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHierarchicalAccess } from "../src/index.js";
 import {
+  AuthZenHttpError,
   AuthZenRequestError,
   authZenMetadataUrl,
   createAccessOnceAuthZenPdp,
@@ -181,6 +182,10 @@ describe("AuthZEN adapter", () => {
         status: 200,
         headers: { "Content-Type": "text/plain", "X-Request-ID": "request-1" },
       }),
+      new Response(JSON.stringify({ decision: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/jsonp", "X-Request-ID": "request-1" },
+      }),
       new Response("{", {
         status: 200,
         headers: { "Content-Type": "application/json", "X-Request-ID": "request-1" },
@@ -198,6 +203,31 @@ describe("AuthZEN adapter", () => {
         resource: { type: "record", id: "1" },
       })).rejects.toBeInstanceOf(AuthZenRequestError);
     }
+  });
+
+  it("preserves non-2xx status when the error response body cannot be read", async () => {
+    const bodyFailure = new Error("response stream aborted");
+    const client = createAuthZenHttpClient("https://pdp.example.com", {
+      fetch: async () => ({
+        ok: false,
+        status: 503,
+        headers: new Headers(),
+        async text() { throw bodyFailure; },
+      }) as unknown as Response,
+    });
+
+    let error: unknown;
+    try {
+      await client.evaluate({
+        subject: { type: "user", id: "alice" },
+        action: { name: "record.read" },
+        resource: { type: "record", id: "1" },
+      });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(AuthZenHttpError);
+    expect(error).toMatchObject({ status: 503, body: "" });
   });
 
   it("uses the standard resource-search endpoint and parses authorized entities", async () => {
