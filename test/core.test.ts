@@ -574,6 +574,39 @@ describe("AccessOnce core", () => {
     }
   });
 
+  it("preserves timeless grants when a transported temporal timeline is explicitly empty", () => {
+    const access = createHierarchicalAccess({
+      catalogId: "empty-temporal-shell-test",
+      catalogVersion: 1,
+      compilerVersion: 1,
+      wildcard: "*",
+      permissions: ["*", "record.read"],
+      leaves: ["record.read"],
+      scopeDimensions: { "record.read": [] },
+    });
+    const timeless = access.compile({ grants: [{ permission: "record.read" }] });
+    const transported = {
+      ...timeless,
+      temporal: {
+        grants: [],
+        grantPositions: [],
+        initialGrantIndexes: [],
+        transitions: [],
+      },
+    } as typeof timeless;
+
+    expect(access.evaluateAt(transported, 0).can("record.read")).toBe(true);
+
+    const malformed = {
+      ...transported,
+      temporal: {
+        ...transported.temporal!,
+        initialGrantIndexes: [0],
+      },
+    };
+    expect(access.evaluateAt(malformed, 0).can("record.read")).toBe(false);
+  });
+
   it("fails closed for malformed temporal snapshot collection shapes", () => {
     const access = createHierarchicalAccess({
       catalogId: "temporal-malformed-shape-test",

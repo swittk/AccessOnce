@@ -134,7 +134,6 @@ export function createAccessEvaluationFactory<
       !Array.isArray(grantPositions) ||
       !Array.isArray(initialGrantIndexes) ||
       !Array.isArray(transitions) ||
-      grants.length === 0 ||
       grantPositions.length !== grants.length
     ) {
       return { accepted: false, active: new Uint8Array(0), activeCount: 0, cursor: 0 };
