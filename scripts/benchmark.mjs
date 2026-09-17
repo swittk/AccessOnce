@@ -79,17 +79,63 @@ function measure(label, check) {
   return checksPerSecond;
 }
 
-/** Keep BYO snapshot support close enough to canonical throughput that adapter ergonomics never hide a hot-path tax. */
-function requireAdaptedRatio(label, canonicalRate, adaptedRate) {
-  if (adaptedRate >= canonicalRate * 0.75) return;
-  throw new Error(
-    `${label} adapted evaluator fell below 75% of canonical throughput: ${Math.round(adaptedRate)} vs ${Math.round(canonicalRate)}`,
-  );
+/** Return the middle value from an odd-sized numeric sample without mutating the caller's array. */
+function median(values) {
+  const ordered = [...values].sort((left, right) => left - right);
+  return ordered[Math.floor(ordered.length / 2)];
 }
 
-const canonicalRate = measure("canonical", () => canonical.can(snapshot, "p.4", context));
-const adaptedRate = measure("adapted", () => adapted.can(externalSnapshot, "p.4", context));
-requireAdaptedRatio("single-grant", canonicalRate, adaptedRate);
+/**
+ * Compare canonical and adapted hot paths with paired samples so one noisy CI scheduling slice cannot
+ * fail an otherwise healthy relative-throughput gate. Alternating order also avoids consistently
+ * advantaging whichever path happens to run first on a fresh CPU boost window.
+ */
+function measureAdaptedComparison(label, canonicalCheck, adaptedCheck) {
+  const sampleCount = 3;
+  const canonicalRates = [];
+  const adaptedRates = [];
+  const ratios = [];
+  for (let sample = 0; sample < sampleCount; sample += 1) {
+    let canonicalRate;
+    let adaptedRate;
+    if (sample % 2 === 0) {
+      canonicalRate = measure(`${label}-canonical-${sample + 1}`, canonicalCheck);
+      adaptedRate = measure(`${label}-adapted-${sample + 1}`, adaptedCheck);
+    } else {
+      adaptedRate = measure(`${label}-adapted-${sample + 1}`, adaptedCheck);
+      canonicalRate = measure(`${label}-canonical-${sample + 1}`, canonicalCheck);
+    }
+    canonicalRates.push(canonicalRate);
+    adaptedRates.push(adaptedRate);
+    ratios.push(adaptedRate / canonicalRate);
+  }
+
+  const canonicalRate = median(canonicalRates);
+  const adaptedRate = median(adaptedRates);
+  const adaptedRatio = median(ratios);
+  console.log(JSON.stringify({
+    label: `${label}-comparison`,
+    canonicalChecksPerSecond: Math.round(canonicalRate),
+    adaptedChecksPerSecond: Math.round(adaptedRate),
+    adaptedToCanonicalRatio: Number(adaptedRatio.toFixed(4)),
+    pairedRatios: ratios.map((ratio) => Number(ratio.toFixed(4))),
+  }, null, 2));
+
+  if (adaptedRatio < 0.75) {
+    throw new Error(
+      `${label} adapted evaluator median fell below 75% of canonical throughput: ` +
+      `${Math.round(adaptedRatio * 10000) / 100}% median ratio`,
+    );
+  }
+  return { canonicalRate, adaptedRate };
+}
+
+const singleComparison = measureAdaptedComparison(
+  "single-grant",
+  () => canonical.can(snapshot, "p.4", context),
+  () => adapted.can(externalSnapshot, "p.4", context),
+);
+const canonicalRate = singleComparison.canonicalRate;
 
 /** Several grants for one permission exercise the cold candidate-bucket index used by scoped business permissions. */
 const correlatedGrants = [];
@@ -105,13 +151,11 @@ for (let index = 0; index < 8; index += 1) {
 const correlatedSnapshot = compileAccessSnapshot(catalog, { grants: correlatedGrants });
 const correlatedExternalSnapshot = { generation: 1, grants: correlatedSnapshot.grants };
 const correlatedContext = { location: "bucket-l6", resource: "bucket-r6" };
-const correlatedCanonicalRate = measure("correlated-canonical", () =>
-  canonical.can(correlatedSnapshot, "p.0", correlatedContext),
+measureAdaptedComparison(
+  "correlated",
+  () => canonical.can(correlatedSnapshot, "p.0", correlatedContext),
+  () => adapted.can(correlatedExternalSnapshot, "p.0", correlatedContext),
 );
-const correlatedAdaptedRate = measure("correlated-adapted", () =>
-  adapted.can(correlatedExternalSnapshot, "p.0", correlatedContext),
-);
-requireAdaptedRatio("correlated", correlatedCanonicalRate, correlatedAdaptedRate);
 
 
 /** Temporal evaluation must not tax the timeless evaluator; same-interval resolution stays request-cheap. */
